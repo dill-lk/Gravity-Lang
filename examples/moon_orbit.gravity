@@ -1,0 +1,33 @@
+# Moon Orbit Around Earth
+# Accurate simulation of Earth-Moon system
+
+# Earth - fixed at origin
+sphere Earth at [0,0,0] radius 6371[km] mass 5.972e24[kg] fixed
+
+# Moon - at average orbital distance
+sphere Moon at [384400,0,0][km] radius 1737[km] mass 7.348e22[kg]
+
+# Set Moon's orbital velocity for circular orbit
+Moon.velocity = [0,1.022,0][km/s]
+
+# Calculate initial orbital elements
+orbital_elements Moon around Earth
+
+# Simulate for one lunar month (27.3 days)
+simulate t in 0..28 step 3600[s] integrator verlet {
+    Earth pull Moon
+    
+    # Print Moon position every hour
+    print Moon.position
+    
+    # Save to file for plotting
+    observe Moon.position to "artifacts/moon_orbit.csv" frequency 1
+}
+
+# Calculate final orbital elements to verify orbit stability
+orbital_elements Moon around Earth
+
+# Expected results:
+# - Semi-major axis: ~384,400 km
+# - Eccentricity: ~0.0549 (slightly elliptical)
+# - Orbital period: ~27.3 days

@@ -1,0 +1,42 @@
+# Complete Solar System Simulation
+# All 8 planets orbiting the Sun
+
+# Central star
+sphere Sun at [0,0,0] radius 696000[km] mass 1.989e30[kg] fixed
+
+# Inner planets
+sphere Mercury at [57.9e6,0,0][km] radius 2439[km] mass 3.285e23[kg]
+Mercury.velocity = [0,47.87,0][km/s]
+
+sphere Venus at [108.2e6,0,0][km] radius 6052[km] mass 4.867e24[kg]
+Venus.velocity = [0,35.02,0][km/s]
+
+sphere Earth at [149.6e6,0,0][km] radius 6371[km] mass 5.972e24[kg]
+Earth.velocity = [0,29.78,0][km/s]
+
+sphere Mars at [227.9e6,0,0][km] radius 3390[km] mass 6.39e23[kg]
+Mars.velocity = [0,24.07,0][km/s]
+
+# Outer planets
+sphere Jupiter at [778.5e6,0,0][km] radius 69911[km] mass 1.898e27[kg]
+Jupiter.velocity = [0,13.07,0][km/s]
+
+sphere Saturn at [1434e6,0,0][km] radius 58232[km] mass 5.683e26[kg]
+Saturn.velocity = [0,9.69,0][km/s]
+
+sphere Uranus at [2871e6,0,0][km] radius 25362[km] mass 8.681e25[kg]
+Uranus.velocity = [0,6.81,0][km/s]
+
+sphere Neptune at [4495e6,0,0][km] radius 24622[km] mass 1.024e26[kg]
+Neptune.velocity = [0,5.43,0][km/s]
+
+# Simulate for 1 Earth year with daily timesteps
+simulate t in 0..365 step 86400[s] integrator leapfrog {
+    grav all
+    
+    # Output positions every 30 days (reduced for demo)
+    print Earth.position
+}
+
+# Monitor total system energy to verify conservation
+monitor energy

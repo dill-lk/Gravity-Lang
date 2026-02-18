@@ -1,0 +1,101 @@
+name: Build Multi-Platform Executables
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    name: Build Windows Executable
+    runs-on: windows-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.12'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install pyinstaller numpy
+    
+    - name: Build Windows executable
+      run: |
+        python gravity_lang_interpreter.py build-exe --name gravity-lang-windows --outdir dist
+    
+    - name: Test executable
+      run: |
+        dist\gravity-lang-windows.exe --version
+    
+    - name: Upload Windows executable
+      uses: actions/upload-artifact@v3
+      with:
+        name: gravity-lang-windows
+        path: dist/gravity-lang-windows.exe
+
+  build-linux:
+    name: Build Linux Executable
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.12'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install pyinstaller numpy
+    
+    - name: Build Linux executable
+      run: |
+        python gravity_lang_interpreter.py build-exe --name gravity-lang-linux --outdir dist
+    
+    - name: Test executable
+      run: |
+        ./dist/gravity-lang-linux --version
+    
+    - name: Upload Linux executable
+      uses: actions/upload-artifact@v3
+      with:
+        name: gravity-lang-linux
+        path: dist/gravity-lang-linux
+
+  build-macos:
+    name: Build macOS Executable
+    runs-on: macos-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.12'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install pyinstaller numpy
+    
+    - name: Build macOS executable
+      run: |
+        python gravity_lang_interpreter.py build-exe --name gravity-lang-macos --outdir dist
+    
+    - name: Test executable
+      run: |
+        ./dist/gravity-lang-macos --version
+    
+    - name: Upload macOS executable
+      uses: actions/upload-artifact@v3
+      with:
+        name: gravity-lang-macos
+        path: dist/gravity-lang-macos

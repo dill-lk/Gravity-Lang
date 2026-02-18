@@ -1,0 +1,22 @@
+# Binary Star System Simulation
+# Two stars orbiting their common center of mass
+
+# Star A - More massive blue star
+sphere StarA at [-500000,0,0][km] radius 700000[km] mass 2e30[kg]
+StarA.velocity = [0,-15,0][km/s]
+
+# Star B - Less massive red star
+sphere StarB at [500000,0,0][km] radius 500000[km] mass 1e30[kg]
+StarB.velocity = [0,30,0][km/s]
+
+# Simulate binary orbit
+simulate t in 0..365 step 3600[s] integrator verlet {
+    StarA pull StarB
+    StarB pull StarA
+    
+    print StarA.position
+    print StarB.position
+}
+
+# Calculate orbital elements to verify stability
+orbital_elements StarA around StarB
