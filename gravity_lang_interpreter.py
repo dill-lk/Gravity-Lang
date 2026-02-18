@@ -27,6 +27,57 @@ except ImportError:
     plt = None  # type: ignore
     HAS_MATPLOTLIB = False
 
+
+# ============================================================================
+# Custom Exception Classes for Better Error Handling
+# ============================================================================
+
+class GravityLangError(Exception):
+    """Base exception for all Gravity-Lang errors."""
+    def __init__(self, message: str, suggestion: str = "", line_number: int | None = None):
+        self.message = message
+        self.suggestion = suggestion
+        self.line_number = line_number
+        super().__init__(self._format_message())
+    
+    def _format_message(self) -> str:
+        """Format error message with colors and suggestions."""
+        parts = []
+        if self.line_number is not None:
+            parts.append(f"❌ Error on line {self.line_number}")
+        else:
+            parts.append("❌ Error")
+        parts.append(f"\n  {self.message}")
+        if self.suggestion:
+            parts.append(f"\n\n💡 Suggestion: {self.suggestion}")
+        return "".join(parts)
+
+
+class ParseError(GravityLangError):
+    """Exception raised for syntax/parsing errors."""
+    pass
+
+
+class SimulationError(GravityLangError):
+    """Exception raised during simulation execution."""
+    pass
+
+
+class UnitError(GravityLangError):
+    """Exception raised for unit-related errors."""
+    pass
+
+
+class ObjectError(GravityLangError):
+    """Exception raised for object-related errors (missing, duplicate, etc.)."""
+    pass
+
+
+class ValidationError(GravityLangError):
+    """Exception raised for validation errors (negative mass, etc.)."""
+    pass
+
+
 G = 6.67430e-11
 GRAVITY_LANG_VERSION = "1.0.0"
 
@@ -904,12 +955,19 @@ class GravityInterpreter:
         token = token.strip()
         m = re.fullmatch(r"([-+]?\d+(?:\.\d+)?(?:e[-+]?\d+)?)(?:\[([a-zA-Z]+)\])?", token)
         if not m:
-            raise ValueError(f"Invalid numeric token: {token}")
+            raise ParseError(
+                f"Invalid numeric value: '{token}'",
+                "Use format: number[unit] (e.g., '100[km]', '5.5[s]', '1e6[kg]')"
+            )
         value = float(m.group(1))
         unit = m.group(2)
         if unit:
             if unit not in UNIT_SCALE:
-                raise ValueError(f"Unsupported unit: {unit}")
+                available_units = ", ".join(UNIT_SCALE.keys())
+                raise UnitError(
+                    f"Unknown unit: '{unit}'",
+                    f"Available units: {available_units}"
+                )
             value *= UNIT_SCALE[unit]
         return value
 
@@ -917,20 +975,33 @@ class GravityInterpreter:
         token = token.strip()
         m = re.fullmatch(r"(\[[^\]]+\])(?:\[([a-zA-Z/]+)\])?", token)
         if not m:
-            raise ValueError(f"Invalid vector token: {token}")
+            raise ParseError(
+                f"Invalid vector: '{token}'",
+                "Use format: [x,y,z] or [x,y,z][unit] (e.g., '[1,2,3]', '[0,1,0][km/s]')"
+            )
 
         vector_text = m.group(1)
         unit = m.group(2)
         inner = vector_text[1:-1]
         parts = [part.strip() for part in inner.split(",")]
         if len(parts) != 3:
-            raise ValueError(f"Vector must have 3 components: {token}")
+            raise ParseError(
+                f"Vector must have exactly 3 components, got {len(parts)}: '{token}'",
+                "Use format: [x,y,z] with three comma-separated values"
+            )
 
         if unit:
             if unit not in VECTOR_UNIT_SCALE:
-                raise ValueError(f"Unsupported vector unit: {unit}")
+                available_units = ", ".join(VECTOR_UNIT_SCALE.keys())
+                raise UnitError(
+                    f"Unknown vector unit: '{unit}'",
+                    f"Available vector units: {available_units}"
+                )
             if any("[" in part for part in parts):
-                raise ValueError("Vector components must be unitless when using vector suffix units")
+                raise ParseError(
+                    "Cannot use units on individual components and vector suffix",
+                    "Use either [1[km],2[km],3[km]] OR [1,2,3][km]"
+                )
             scale = VECTOR_UNIT_SCALE[unit]
             return (float(parts[0]) * scale, float(parts[1]) * scale, float(parts[2]) * scale)
 
@@ -977,7 +1048,17 @@ class GravityInterpreter:
 
     def _require_object(self, obj_name: str, context: str) -> Body:
         if obj_name not in self.objects:
-            raise ValueError(f"Unknown object '{obj_name}' referenced in {context}")
+            available = list(self.objects.keys())
+            if available:
+                suggestion = f"Available objects: {', '.join(available[:5])}"
+                if len(available) > 5:
+                    suggestion += f" (and {len(available) - 5} more)"
+            else:
+                suggestion = "No objects have been created yet. Create objects first with 'sphere', 'cube', etc."
+            raise ObjectError(
+                f"Object '{obj_name}' does not exist (referenced in {context})",
+                suggestion
+            )
         return self.objects[obj_name]
 
     def execute(self, source: str) -> List[str]:
@@ -1032,7 +1113,10 @@ class GravityInterpreter:
                 self._exec_orbital_elements(line)
                 i += 1
             else:
-                raise ValueError(f"Unsupported statement: {line}")
+                raise ParseError(
+                    f"Unknown statement: '{line}'",
+                    "Valid statements: sphere/cube/pointmass/probe, pull, grav all, friction, collisions, thrust, simulate, orbit, print, monitor energy, observe, orbital_elements"
+                )
         return self.output
 
     def _parse_object(self, line: str) -> None:
@@ -1040,14 +1124,17 @@ class GravityInterpreter:
             shape, rest = line.split(" ", 1)
             name, rest = rest.split(" at ", 1)
         except ValueError as exc:
-            raise ValueError(f"Invalid object declaration syntax: {line}") from exc
+            raise ParseError(
+                f"Invalid object syntax: '{line}'",
+                "Use format: sphere ObjectName at [x,y,z] mass value[unit] ...",
+                line_number=None
+            ) from exc
 
         # Check for duplicate object names
         if name.strip() in self.objects:
-            raise ValueError(
-                f"Error: Object '{name.strip()}' already exists.\n"
-                f"  Each object must have a unique name.\n"
-                f"  Line: {line}"
+            raise ObjectError(
+                f"Object '{name.strip()}' already exists",
+                f"Each object must have a unique name. Choose a different name or remove the existing '{name.strip()}' object."
             )
 
         try:
@@ -1063,15 +1150,17 @@ class GravityInterpreter:
 
         m_mass = re.search(r"mass\s+([^\s]+)", trailing)
         if not m_mass:
-            raise ValueError(f"Object declaration missing mass: {line}")
+            raise ParseError(
+                f"Object declaration missing mass: '{line}'",
+                "Add 'mass value[unit]' (e.g., 'mass 5.972e24[kg]')"
+            )
         mass = self.parse_value(m_mass.group(1))
         
         # Validate positive mass
         if mass <= 0:
-            raise ValueError(
-                f"Error: Mass must be positive, got {mass}\n"
-                f"  Physical objects cannot have zero or negative mass.\n"
-                f"  Line: {line}"
+            raise ValidationError(
+                f"Mass must be positive, got {mass}",
+                "Physical objects cannot have zero or negative mass. Use a positive value like '1[kg]' or '1e30[kg]'"
             )
 
         radius = 1.0
@@ -1083,9 +1172,9 @@ class GravityInterpreter:
             radius = self.parse_value(m_radius.group(1))
             # Validate positive radius
             if radius <= 0:
-                raise ValueError(
-                    f"Error: Radius must be positive, got {radius}\n"
-                    f"  Line: {line}"
+                raise ValidationError(
+                    f"Radius must be positive, got {radius}",
+                    "Use a positive value like '6371[km]' for Earth-sized objects"
                 )
 
         if "velocity" in trailing:

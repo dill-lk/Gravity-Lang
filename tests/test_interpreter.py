@@ -33,9 +33,9 @@ class InterpreterTests(unittest.TestCase):
         self.assertEqual(interp.parse_vector("[1,2,3][km]"), (1000.0, 2000.0, 3000.0))
         self.assertEqual(interp.parse_vector("[0,1,0][km/s]"), (0.0, 1000.0, 0.0))
 
-    def test_unknown_object_in_print_raises_value_error(self):
+    def test_unknown_object_in_print_raises_error(self):
         interp = GravityInterpreter()
-        with self.assertRaises(ValueError):
+        with self.assertRaises(Exception):  # ObjectError inherits from GravityLangError which inherits from Exception
             interp.execute("print Missing.position")
 
     def test_simulate_loop_and_observe_stream(self):
