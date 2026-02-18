@@ -16,17 +16,38 @@ The current repository focuses on the Python prototype, but the runtime is now s
 
 ## Implemented v2 Scientific Concepts
 
-- **Physics kernel integrators**: loop-level `integrator leapfrog|rk4` selection (default: `leapfrog`).
-- **RK4 implementation**: `rk4` now runs an actual 4th-order Runge-Kutta timestep for position/velocity evolution.
-- **Scientific loop syntax**: supports both `orbit ... dt ... {}` and `simulate ... step ... {}`.
-- **3D runtime controls**: `grav all`, `friction <value>`, and `collisions on|off` are supported inside/outside loops.
-- **Propulsion controls**: `thrust <Object> by [vx,vy,vz][m/s]` applies script-level delta-v for maneuvers.
-- **System monitoring**: `monitor energy` records total system energy (kinetic + pairwise gravitational potential).
-- **Explicit physics step**: `step_physics(Target, Source)` forces a pairwise 3D gravity update for that timestep.
-- **Observer pattern**: `observe Object.position|velocity to "file.csv" frequency N` streams step data to CSV.
-- **Dimensional quantities**: `Quantity` operations support unit-aware dimensional consistency checks for algebraic expressions.
-- **Extended primitives**: `sphere`, `cube`, `pointmass`, `probe`; optional `fixed` and `velocity` properties.
-- **Vector suffix units**: vectors can be written as `[x,y,z][m]`, `[x,y,z][km]`, `[x,y,z][m/s]`, `[x,y,z][km/s]`.
+### Physics Integrators (Enhanced!)
+- **Multiple integrators**: `integrator leapfrog|rk4|verlet|euler` selection (default: `leapfrog`)
+  - **leapfrog**: 2nd order symplectic, good for long-term orbital stability
+  - **rk4**: 4th order Runge-Kutta, high accuracy for short-term precision
+  - **verlet**: Velocity Verlet, time-reversible and symplectic, excellent energy conservation
+  - **euler**: Simple 1st order, fast but less accurate
+
+### Orbital Mechanics
+- **Orbital element calculation**: `orbital_elements Object around CentralBody` computes:
+  - Semi-major axis (km)
+  - Eccentricity (dimensionless)
+  - Inclination (degrees)
+  - Periapsis distance (km)
+  - Apoapsis distance (km)
+  - And more Keplerian elements
+
+### Advanced Vector Operations
+- Cross product: `v_cross(a, b)` for angular momentum calculations
+- Distance: `v_distance(a, b)` for quick position differences
+- Angle: `v_angle(a, b)` for vector angles in radians
+- All standard operations: add, subtract, scale, magnitude, normalize, dot product
+
+### Core Features
+- **Scientific loop syntax**: supports both `orbit ... dt ... {}` and `simulate ... step ... {}`
+- **3D runtime controls**: `grav all`, `friction <value>`, and `collisions on|off` are supported inside/outside loops
+- **Propulsion controls**: `thrust <Object> by [vx,vy,vz][m/s]` applies script-level delta-v for maneuvers
+- **System monitoring**: `monitor energy` records total system energy (kinetic + pairwise gravitational potential)
+- **Explicit physics step**: `step_physics(Target, Source)` forces a pairwise 3D gravity update for that timestep
+- **Observer pattern**: `observe Object.position|velocity to "file.csv" frequency N` streams step data to CSV
+- **Dimensional quantities**: `Quantity` operations support unit-aware dimensional consistency checks for algebraic expressions
+- **Extended primitives**: `sphere`, `cube`, `pointmass`, `probe`; optional `fixed` and `velocity` properties
+- **Vector suffix units**: vectors can be written as `[x,y,z][m]`, `[x,y,z][km]`, `[x,y,z][m/s]`, `[x,y,z][km/s]`
 
 ## Example (3D Orbital Setup)
 
@@ -63,6 +84,31 @@ simulate t in 0..24 step 3600[s] integrator rk4 {
 }
 ```
 
+## Example (Orbital Elements and Advanced Integrators)
+
+```gravity
+# Calculate orbital parameters for a satellite
+sphere Earth at [0,0,0] radius 6371[km] mass 5.972e24[kg] fixed
+sphere Satellite at [7000,0,0][km] mass 500[kg] velocity [0,7.5,0][km/s]
+
+# Calculate initial orbital elements
+orbital_elements Satellite around Earth
+
+# Simulate using Verlet integrator (excellent energy conservation)
+simulate t in 0..10 step 60[s] integrator verlet {
+    Earth pull Satellite
+    print Satellite.position
+}
+
+# Calculate final orbital elements to verify stability
+orbital_elements Satellite around Earth
+```
+
+Output includes:
+- Semi-major axis, eccentricity, inclination
+- Periapsis and apoapsis distances
+- Orbital element changes over time to verify energy conservation
+
 ## Dimensional Quantity Example (Python API)
 
 ```python
@@ -97,19 +143,24 @@ python gravity_lang_interpreter.py check examples/earth_moon.gravity
 python gravity_lang_interpreter.py --version
 ```
 
-## Build Executable (v1.0)
+## Build Executable (v1.0+)
 
 Use the built-in CLI command to create a standalone executable via PyInstaller:
 
 ```bash
 python -m pip install pyinstaller
-python gravity_lang_interpreter.py build-exe --name gravity-lang-v1.0 --outdir dist --install-pyinstaller
+python gravity_lang_interpreter.py build-exe --name gravity-lang-enhanced --outdir dist
 ```
 
-This emits `dist/gravity-lang-v1.0` (or `dist/gravity-lang-v1.0.exe` on Windows). Use `--no-clean` if you want faster iterative local builds.
+This creates `dist/gravity-lang-enhanced` (or `dist/gravity-lang-enhanced.exe` on Windows). 
 
-python gravity_lang_interpreter.py examples/earth_moon.gravity
+Test the executable:
+```bash
+./dist/gravity-lang-enhanced --version
+./dist/gravity-lang-enhanced run examples/advanced_features.gravity
 ```
+
+Use `--no-clean` for faster iterative builds during development.
 
 ## Tests
 
@@ -117,16 +168,29 @@ python gravity_lang_interpreter.py examples/earth_moon.gravity
 python -m unittest discover -s tests -v
 ```
 
+The test suite includes:
+- 19 original tests covering core functionality
+- 7 new tests for advanced features (integrators, vector ops, orbital elements)
+- All 26 tests passing
+
 ## Next Steps
 
-1. Replace `PythonPhysicsBackend` with a C++ kernel (pybind11) while keeping parser semantics stable.
-2. Add optional NumPy/CuPy vectorized execution paths for large N-body systems.
-3. Add Rust worker backend for parallel large-N body updates.
-4. Add Go simulation control plane for remote orchestration.
-5. Add C# editor/renderer with camera/lights/inspector.
-6. Add Parquet/Arrow observers and plotting hooks (energy drift, phase diagrams).
-1. Replace `PythonPhysicsBackend` with a real C++ kernel (pybind11) and true RK4 implementation.
-2. Add Rust worker backend for parallel large-N body updates.
-3. Add Go simulation control plane for remote orchestration.
-4. Add C# editor/renderer with camera/lights/inspector.
-5. Add Parquet/Arrow observers and plotting hooks (energy drift, phase diagrams).
+## Recent Enhancements (v2+)
+
+✅ **Completed:**
+- Multiple physics integrators (Leapfrog, RK4, Verlet, Euler)
+- Orbital element calculations (Keplerian orbits)
+- Advanced vector operations (cross product, distance, angle)
+- Comprehensive test suite (26 tests)
+- Standalone executable building with PyInstaller
+
+## Next Steps
+
+1. Replace `PythonPhysicsBackend` with a C++ kernel (pybind11) for 10-100x performance boost
+2. Add optional NumPy/CuPy vectorized execution paths for large N-body systems (1000+ objects)
+3. Add Rust worker backend for parallel large-N body updates
+4. Add Go simulation control plane for remote orchestration and cloud execution
+5. Add C# editor/renderer with camera/lights/inspector for real-time visualization
+6. Add Parquet/Arrow observers and plotting hooks (energy drift, phase diagrams)
+7. Add adaptive timestep control based on system energy or positional changes
+8. Add coordinate system transformations (Cartesian ↔ Spherical ↔ Orbital elements)
