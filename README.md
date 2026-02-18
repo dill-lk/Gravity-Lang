@@ -4,9 +4,12 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey.svg)]()
 [![Tests](https://img.shields.io/badge/tests-26%20passing-brightgreen.svg)]()
 
 Gravity-Lang is a clean, expressive language for simulating N-body gravitational systems. Write physics simulations in minutes, not hours.
+
+**✨ Cross-platform**: Works on Windows, Linux, and macOS!
 
 ```gravity
 sphere Earth at [0,0,0] radius 6371[km] mass 5.972e24[kg] fixed
@@ -33,21 +36,36 @@ simulate t in 0..28 step 3600[s] integrator verlet {
 
 ## 📦 Installation
 
-### Quick Start (No Installation)
+### Quick Start (Cross-Platform: Windows/Linux/macOS)
+
+**Python source works on all platforms!**
 
 ```bash
 # Clone the repository
 git clone https://github.com/dill-lk/Gravity-Lang.git
 cd Gravity-Lang
 
-# Run examples directly
+# Run examples directly (no installation needed!)
 python gravity_lang_interpreter.py run examples/moon_orbit.gravity
 ```
 
+**Windows users**: See [WINDOWS.md](WINDOWS.md) for detailed Windows instructions.
+
 ### Build Standalone Executable
 
+**Note**: Executables are platform-specific. Build on your target platform.
+
 ```bash
-# Install PyInstaller
+# Install dependencies
+pip install pyinstaller numpy
+
+# Build executable for your platform
+python gravity_lang_interpreter.py build-exe --name gravity-lang --outdir dist
+
+# Run it
+./dist/gravity-lang run examples/solar_system.gravity         # Linux/macOS
+.\dist\gravity-lang.exe run examples\solar_system.gravity     # Windows
+```
 pip install pyinstaller numpy
 
 # Build executable
