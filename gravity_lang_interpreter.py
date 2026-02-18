@@ -1,14 +1,20 @@
 from __future__ import annotations
 
 import csv
+import ctypes
+import os
+import json
 import math
 import re
 import shutil
 import subprocess
 import sys
+import tempfile
+import time
+import statistics
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Dict, List, Literal, Protocol, Tuple
+from typing import Any, Callable, Dict, List, Literal, Protocol, Tuple
 
 # Optional NumPy support for performance
 try:
@@ -20,12 +26,23 @@ except ImportError:
 
 # Optional matplotlib support for 3D visualization
 try:
+    import matplotlib
+    if not os.environ.get("DISPLAY") and not sys.platform.startswith("win"):
+        matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     from mpl_toolkits.mplot3d import Axes3D
     HAS_MATPLOTLIB = True
 except ImportError:
     plt = None  # type: ignore
     HAS_MATPLOTLIB = False
+
+# Optional Plotly support for interactive 3D viewer
+try:
+    import plotly.graph_objects as go
+    HAS_PLOTLY = True
+except ImportError:
+    go = None  # type: ignore
+    HAS_PLOTLY = False
 
 
 # ============================================================================
@@ -112,6 +129,7 @@ BASE_DIMS = {
 
 Vec3 = Tuple[float, float, float]
 Integrator = Literal["leapfrog", "rk4", "verlet", "euler"]
+BackendName = Literal["auto", "python", "numpy", "cpp", "julia_diffeq"]
 
 
 def v_add(a: Vec3, b: Vec3) -> Vec3:
@@ -414,24 +432,24 @@ class Visualizer3D:
             )
             self.ax.scatter([x], [y], [z], color=color, s=size, 
                           marker='o', edgecolors='black', linewidth=0.5, label=name)
-        
+
         # Auto-scale axes to fit all objects
         all_positions = [obj.position for obj in objects.values()]
         if all_positions:
             xs = [p[0] for p in all_positions]
             ys = [p[1] for p in all_positions]
             zs = [p[2] for p in all_positions]
-            
+
             # Add some padding
             x_range = max(xs) - min(xs) if len(xs) > 1 else 1e6
             y_range = max(ys) - min(ys) if len(ys) > 1 else 1e6
             z_range = max(zs) - min(zs) if len(zs) > 1 else 1e6
             max_range = max(x_range, y_range, z_range) * 1.2
-            
+
             mid_x = (max(xs) + min(xs)) / 2
             mid_y = (max(ys) + min(ys)) / 2
             mid_z = (max(zs) + min(zs)) / 2
-            
+
             self.ax.set_xlim(mid_x - max_range/2, mid_x + max_range/2)
             self.ax.set_ylim(mid_y - max_range/2, mid_y + max_range/2)
             self.ax.set_zlim(mid_z - max_range/2, mid_z + max_range/2)
@@ -486,7 +504,26 @@ class Visualizer3D:
             return
         
         print(f"📹 Creating animation with {max_frames} frames...")
-        
+
+        # Precompute global bounds for stable camera/scale across frames
+        all_points: List[Vec3] = []
+        for trajectory in self.trajectories.values():
+            all_points.extend(trajectory)
+        if all_points:
+            all_x = [p[0] for p in all_points]
+            all_y = [p[1] for p in all_points]
+            all_z = [p[2] for p in all_points]
+            x_range = max(all_x) - min(all_x) if len(all_x) > 1 else 1e6
+            y_range = max(all_y) - min(all_y) if len(all_y) > 1 else 1e6
+            z_range = max(all_z) - min(all_z) if len(all_z) > 1 else 1e6
+            global_max_range = max(x_range, y_range, z_range) * 1.2
+            global_mid_x = (max(all_x) + min(all_x)) / 2
+            global_mid_y = (max(all_y) + min(all_y)) / 2
+            global_mid_z = (max(all_z) + min(all_z)) / 2
+        else:
+            global_max_range = 1e6
+            global_mid_x = global_mid_y = global_mid_z = 0.0
+
         # Create figure for animation
         self.fig = plt.figure(figsize=(10, 8))
         self.ax = self.fig.add_subplot(111, projection='3d')
@@ -542,34 +579,10 @@ class Visualizer3D:
                     self.ax.scatter([x], [y], [z], color=color, s=size,
                                   marker='o', edgecolors='black', linewidth=0.5, label=name)
             
-            # Auto-scale axes
-            if all_positions_frame:
-                xs = [p[0] for p in all_positions_frame]
-                ys = [p[1] for p in all_positions_frame]
-                zs = [p[2] for p in all_positions_frame]
-                
-                # Get all trajectory points for consistent scaling
-                all_traj_points = []
-                for trajectory in self.trajectories.values():
-                    all_traj_points.extend(trajectory[:frame+1])
-                
-                if all_traj_points:
-                    all_xs = [p[0] for p in all_traj_points]
-                    all_ys = [p[1] for p in all_traj_points]
-                    all_zs = [p[2] for p in all_traj_points]
-                    
-                    x_range = max(all_xs) - min(all_xs) if len(all_xs) > 1 else 1e6
-                    y_range = max(all_ys) - min(all_ys) if len(all_ys) > 1 else 1e6
-                    z_range = max(all_zs) - min(all_zs) if len(all_zs) > 1 else 1e6
-                    max_range = max(x_range, y_range, z_range) * 1.2
-                    
-                    mid_x = (max(all_xs) + min(all_xs)) / 2
-                    mid_y = (max(all_ys) + min(all_ys)) / 2
-                    mid_z = (max(all_zs) + min(all_zs)) / 2
-                    
-                    self.ax.set_xlim(mid_x - max_range/2, mid_x + max_range/2)
-                    self.ax.set_ylim(mid_y - max_range/2, mid_y + max_range/2)
-                    self.ax.set_zlim(mid_z - max_range/2, mid_z + max_range/2)
+            # Use fixed global bounds for consistent/accurate animation framing
+            self.ax.set_xlim(global_mid_x - global_max_range/2, global_mid_x + global_max_range/2)
+            self.ax.set_ylim(global_mid_y - global_max_range/2, global_mid_y + global_max_range/2)
+            self.ax.set_zlim(global_mid_z - global_max_range/2, global_mid_z + global_max_range/2)
             
             self.ax.legend(loc='upper right', fontsize='small')
             return []
@@ -1085,6 +1098,264 @@ class NumPyPhysicsBackend:
         raise ValueError(f"Unsupported integrator: {integrator}")
 
 
+class CppPhysicsBackend(NumPyPhysicsBackend):
+    """C++-accelerated backend for pairwise acceleration accumulation.
+
+    Uses a tiny native kernel (compiled with g++) to compute acceleration vectors
+    and keeps integrators in Python for compatibility with existing DSL behavior.
+    """
+
+    def __init__(self, gravity_law: GravityLaw | None = None) -> None:
+        super().__init__(gravity_law=gravity_law)
+        if self.gravity_law != newtonian_gravity:
+            raise RuntimeError("CppPhysicsBackend currently supports only Newtonian gravity")
+        self._kernel = self._load_kernel()
+
+    def _load_kernel(self) -> Any:
+        gxx = shutil.which("g++")
+        if not gxx:
+            raise RuntimeError("g++ compiler not found. Install g++ or use --backend numpy")
+        src = r'''#include <cmath>
+extern "C" void compute_acc(
+    int n,
+    int pair_count,
+    const int* src_idx,
+    const int* dst_idx,
+    const double* masses,
+    const double* pos,
+    double* acc
+){
+    const double G = 6.67430e-11;
+    for(int i=0;i<n*3;i++) acc[i]=0.0;
+    for(int p=0;p<pair_count;p++){
+        int s = src_idx[p];
+        int t = dst_idx[p];
+        double dx = pos[s*3+0]-pos[t*3+0];
+        double dy = pos[s*3+1]-pos[t*3+1];
+        double dz = pos[s*3+2]-pos[t*3+2];
+        double r = std::sqrt(dx*dx+dy*dy+dz*dz);
+        if(r<1e-9) r=1e-9;
+        double a = G*masses[p]/(r*r);
+        double invr = 1.0/r;
+        acc[t*3+0] += a*dx*invr;
+        acc[t*3+1] += a*dy*invr;
+        acc[t*3+2] += a*dz*invr;
+    }
+}
+'''
+        td = Path(tempfile.gettempdir()) / "gravity_lang_cpp_kernel"
+        td.mkdir(parents=True, exist_ok=True)
+        cpp = td / "kernel.cpp"
+        so = td / ("kernel.dll" if sys.platform.startswith("win") else "kernel.so")
+        cpp.write_text(src, encoding="utf-8")
+        compile_cmd = [gxx, "-O3", "-shared", "-std=c++17"]
+        if not sys.platform.startswith("win"):
+            compile_cmd.append("-fPIC")
+        compile_cmd += [str(cpp), "-o", str(so)]
+        try:
+            subprocess.run(compile_cmd, check=True, capture_output=True, text=True)
+        except subprocess.CalledProcessError as exc:
+            raise RuntimeError(f"Failed to compile C++ kernel: {exc.stderr.strip()}") from exc
+
+        lib = ctypes.CDLL(str(so))
+        fn = lib.compute_acc
+        fn.argtypes = [
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.POINTER(ctypes.c_int),
+            ctypes.POINTER(ctypes.c_int),
+            ctypes.POINTER(ctypes.c_double),
+            ctypes.POINTER(ctypes.c_double),
+            ctypes.POINTER(ctypes.c_double),
+        ]
+        fn.restype = None
+        return fn
+
+    def _accelerations_for_positions_numpy(
+        self,
+        objects: Dict[str, Body],
+        pull_pairs: List[Tuple[str, str]],
+        positions_dict: Dict[str, Vec3],
+    ) -> Dict[str, Vec3]:
+        if not pull_pairs:
+            return {name: (0.0, 0.0, 0.0) for name in objects}
+
+        name_to_idx = {name: i for i, name in enumerate(objects.keys())}
+        n = len(objects)
+        pair_count = len(pull_pairs)
+
+        src = np.array([name_to_idx[s] for s, _ in pull_pairs], dtype=np.int32)
+        dst = np.array([name_to_idx[t] for _, t in pull_pairs], dtype=np.int32)
+        masses = np.array([objects[s].mass for s, _ in pull_pairs], dtype=np.float64)
+
+        pos = np.zeros((n, 3), dtype=np.float64)
+        for name, idx in name_to_idx.items():
+            pos[idx] = positions_dict[name]
+        acc = np.zeros((n, 3), dtype=np.float64)
+
+        self._kernel(
+            ctypes.c_int(n),
+            ctypes.c_int(pair_count),
+            src.ctypes.data_as(ctypes.POINTER(ctypes.c_int)),
+            dst.ctypes.data_as(ctypes.POINTER(ctypes.c_int)),
+            masses.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
+            pos.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
+            acc.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
+        )
+
+        return {
+            name: (float(acc[idx, 0]), float(acc[idx, 1]), float(acc[idx, 2]))
+            for name, idx in name_to_idx.items()
+        }
+
+
+class JuliaDiffEqBackend:
+    """Julia DifferentialEquations.jl backend.
+
+    This backend calls Julia to solve Newtonian N-body equations with
+    DifferentialEquations.jl's Tsit5 solver for each step.
+    """
+
+    def __init__(self, julia_bin: str = "julia") -> None:
+        self.julia_bin = julia_bin
+
+    def _build_payload(
+        self,
+        objects: Dict[str, Body],
+        pull_pairs: List[Tuple[str, str]],
+        dt: float,
+    ) -> str:
+        payload = {
+            "dt": dt,
+            "objects": {
+                name: {
+                    "position": list(body.position),
+                    "velocity": list(body.velocity),
+                    "mass": body.mass,
+                    "fixed": body.fixed,
+                }
+                for name, body in objects.items()
+            },
+            "pull_pairs": pull_pairs,
+        }
+        return json.dumps(payload)
+
+    def step(
+        self,
+        objects: Dict[str, Body],
+        pull_pairs: List[Tuple[str, str]],
+        dt: float,
+        integrator: Integrator,
+    ) -> None:
+        _ = integrator  # DifferentialEquations.jl controls its own solver strategy.
+        script = r'''
+using JSON
+using DifferentialEquations
+
+function solve_step(payload)
+    names = collect(keys(payload["objects"]))
+    sort!(names)
+    index = Dict(name => i for (i, name) in enumerate(names))
+    n = length(names)
+
+    x0 = zeros(Float64, 6n)
+    masses = zeros(Float64, n)
+    fixed = falses(n)
+
+    for (i, name) in enumerate(names)
+        body = payload["objects"][name]
+        x0[3i-2:3i] .= Float64.(body["position"])
+        x0[3n+3i-2:3n+3i] .= Float64.(body["velocity"])
+        masses[i] = body["mass"]
+        fixed[i] = body["fixed"]
+    end
+
+    pairs = [(index[p[1]], index[p[2]]) for p in payload["pull_pairs"]]
+    G = 6.67430e-11
+
+    function rhs!(du, u, p, t)
+        pos = reshape(view(u, 1:3n), 3, n)
+        vel = reshape(view(u, 3n+1:6n), 3, n)
+
+        du[1:3n] .= vec(vel)
+        du[3n+1:6n] .= 0.0
+
+        for (src, dst) in pairs
+            if fixed[dst]
+                continue
+            end
+            dx = pos[1, src] - pos[1, dst]
+            dy = pos[2, src] - pos[2, dst]
+            dz = pos[3, src] - pos[3, dst]
+            r = max(sqrt(dx*dx + dy*dy + dz*dz), 1e-9)
+            a = G * masses[src] / (r * r)
+            base = 3n + 3dst - 2
+            du[base] += a * dx / r
+            du[base + 1] += a * dy / r
+            du[base + 2] += a * dz / r
+        end
+    end
+
+    prob = ODEProblem(rhs!, x0, (0.0, payload["dt"]))
+    sol = solve(prob, Tsit5(); abstol=1e-9, reltol=1e-9)
+    y = sol.u[end]
+
+    out = Dict{String, Any}()
+    for (i, name) in enumerate(names)
+        out[name] = Dict(
+            "position" => [y[3i-2], y[3i-1], y[3i]],
+            "velocity" => [y[3n+3i-2], y[3n+3i-1], y[3n+3i]],
+        )
+    end
+    println(JSON.json(out))
+end
+
+payload = JSON.parse(read(stdin, String))
+solve_step(payload)
+'''
+        payload = self._build_payload(objects, pull_pairs, dt)
+        try:
+            result = subprocess.run(
+                [self.julia_bin, "-e", script],
+                input=payload,
+                text=True,
+                capture_output=True,
+                check=True,
+            )
+        except FileNotFoundError as exc:
+            raise RuntimeError(
+                "Julia binary not found. Install Julia and DifferentialEquations.jl "
+                "or choose --backend python/--backend numpy."
+            ) from exc
+        except subprocess.CalledProcessError as exc:
+            stderr = exc.stderr.strip() if exc.stderr else "Unknown Julia backend failure"
+            raise RuntimeError(
+                "Julia DifferentialEquations backend failed. Ensure packages JSON and "
+                f"DifferentialEquations are installed. Details: {stderr}"
+            ) from exc
+
+        updated = json.loads(result.stdout)
+        for name, state in updated.items():
+            objects[name].position = tuple(state["position"])  # type: ignore[assignment]
+            objects[name].velocity = tuple(state["velocity"])  # type: ignore[assignment]
+
+
+def _default_backend_name(julia_bin: str = "julia") -> BackendName:
+    """Prefer fastest available local backend with graceful fallback."""
+    if HAS_NUMPY:
+        try:
+            _ = CppPhysicsBackend()
+            return "cpp"
+        except RuntimeError:
+            pass
+    if HAS_NUMPY:
+        return "numpy"
+    if shutil.which(julia_bin):
+        return "julia_diffeq"
+    return "python"
+
+
+
 class GravityInterpreter:
     def __init__(self, physics_backend: PhysicsBackend | None = None, enable_3d_viz: bool = False, 
                  viz_interval: int = 1) -> None:
@@ -1092,9 +1363,10 @@ class GravityInterpreter:
         self.pull_pairs: set[Tuple[str, str]] = set()  # Using set for O(1) membership checks
         self.output: List[str] = []
         self.observers: List[Observer] = []
+        self.variables: Dict[str, float] = {}
         self.global_friction = 0.0
         self.enable_collisions = True
-        self.physics_backend = physics_backend or PythonPhysicsBackend()
+        self.physics_backend = physics_backend or create_physics_backend("auto")
         self.visualizer: Visualizer3D | None = None
         self.enable_3d_viz = enable_3d_viz
         if enable_3d_viz:
@@ -1106,6 +1378,8 @@ class GravityInterpreter:
 
     def parse_value(self, token: str) -> float:
         token = token.strip()
+        if token in self.variables:
+            return self.variables[token]
         m = re.fullmatch(r"([-+]?\d+(?:\.\d+)?(?:e[-+]?\d+)?)(?:\[([a-zA-Z]+)\])?", token)
         if not m:
             raise ParseError(
@@ -1214,6 +1488,64 @@ class GravityInterpreter:
             )
         return self.objects[obj_name]
 
+    def _parse_variable_assignment(self, line: str) -> None:
+        m = re.fullmatch(r"let\s+(\w+)\s*=\s*(.+)", line)
+        if not m:
+            raise ParseError(
+                f"Invalid let assignment: '{line}'",
+                "Use format: let variable = value"
+            )
+        name = m.group(1)
+        value = self.parse_value(m.group(2).strip())
+        self.variables[name] = value
+
+    def _evaluate_condition(self, expr: str) -> bool:
+        m = re.fullmatch(r"(.+?)\s*(==|!=|<=|>=|<|>)\s*(.+)", expr.strip())
+        if not m:
+            raise ParseError(
+                f"Invalid condition: '{expr}'",
+                "Use format like: if x > 10 then print Earth.position"
+            )
+        left = self.parse_value(m.group(1).strip())
+        op = m.group(2)
+        right = self.parse_value(m.group(3).strip())
+        if op == "==":
+            return left == right
+        if op == "!=":
+            return left != right
+        if op == "<=":
+            return left <= right
+        if op == ">=":
+            return left >= right
+        if op == "<":
+            return left < right
+        return left > right
+
+    def _run_single_statement(self, line: str) -> bool:
+        if line.startswith("let "):
+            self._parse_variable_assignment(line)
+            return True
+        if line.startswith("if ") and " then " in line:
+            cond_text, stmt = line[3:].split(" then ", 1)
+            if self._evaluate_condition(cond_text):
+                nested = stmt.strip()
+                if self._run_single_statement(nested):
+                    return True
+                if nested.startswith("thrust "):
+                    self._parse_thrust(nested)
+                    return True
+                if nested.startswith("print "):
+                    self._exec_print(nested)
+                    return True
+                if nested == "monitor energy":
+                    self._exec_monitor_energy()
+                    return True
+                if nested.endswith(".velocity") and "=" in nested:
+                    self._parse_velocity_assignment(nested)
+                    return True
+            return True
+        return False
+
     def execute(self, source: str) -> List[str]:
         lines = []
         for raw_line in source.splitlines():
@@ -1223,7 +1555,9 @@ class GravityInterpreter:
         i = 0
         while i < len(lines):
             line = lines[i]
-            if line.startswith(("sphere ", "cube ", "pointmass ", "probe ")):
+            if self._run_single_statement(line):
+                i += 1
+            elif line.startswith(("sphere ", "cube ", "pointmass ", "probe ")):
                 self._parse_object(line)
                 i += 1
             elif ".velocity" in line and "=" in line:
@@ -1495,15 +1829,100 @@ class GravityInterpreter:
                 if not b.fixed:
                     b.velocity = v_add(b.velocity, v_scale(impulse, inv_mass_b))
 
+    def _copy_objects_state(self, objects: Dict[str, Body]) -> Dict[str, Body]:
+        return {
+            name: Body(
+                name=body.name,
+                shape=body.shape,
+                position=body.position,
+                velocity=body.velocity,
+                mass=body.mass,
+                radius=body.radius,
+                fixed=body.fixed,
+                color=body.color,
+                properties=dict(body.properties),
+            )
+            for name, body in objects.items()
+        }
+
+    def _assign_objects_state(self, target: Dict[str, Body], source: Dict[str, Body]) -> None:
+        for name in target:
+            target[name].position = source[name].position
+            target[name].velocity = source[name].velocity
+
+    def _estimate_state_error(self, a: Dict[str, Body], b: Dict[str, Body]) -> float:
+        max_error = 0.0
+        for name, body_a in a.items():
+            body_b = b[name]
+            if body_a.fixed:
+                continue
+            pos_scale = max(v_mag(body_a.position), v_mag(body_b.position), 1.0)
+            vel_scale = max(v_mag(body_a.velocity), v_mag(body_b.velocity), 1.0)
+            pos_err = v_mag(v_sub(body_a.position, body_b.position)) / pos_scale
+            vel_err = v_mag(v_sub(body_a.velocity, body_b.velocity)) / vel_scale
+            max_error = max(max_error, pos_err, vel_err)
+        return max_error
+
+    def _adaptive_integrate_step(
+        self,
+        step_pairs: List[Tuple[str, str]],
+        dt: float,
+        integrator: Integrator,
+        adaptive_tol: float,
+        adaptive_min_dt: float,
+        adaptive_max_dt: float,
+        next_dt_hint: float,
+        on_substep_accepted: Callable[[], None] | None = None,
+    ) -> float:
+        remaining = dt
+        trial_dt = min(max(next_dt_hint, adaptive_min_dt), adaptive_max_dt, dt)
+
+        while remaining > 1e-12:
+            current_dt = min(trial_dt, remaining)
+            if current_dt < adaptive_min_dt:
+                current_dt = min(adaptive_min_dt, remaining)
+
+            start_state = self._copy_objects_state(self.objects)
+            single_step_state = self._copy_objects_state(start_state)
+            self.physics_backend.step(single_step_state, step_pairs, current_dt, integrator)
+
+            two_half_state = self._copy_objects_state(start_state)
+            half_dt = current_dt * 0.5
+            self.physics_backend.step(two_half_state, step_pairs, half_dt, integrator)
+            self.physics_backend.step(two_half_state, step_pairs, half_dt, integrator)
+
+            relative_error = self._estimate_state_error(single_step_state, two_half_state)
+
+            if relative_error <= adaptive_tol or current_dt <= adaptive_min_dt * 1.001:
+                self._assign_objects_state(self.objects, two_half_state)
+                self._apply_friction(current_dt)
+                self._resolve_collisions()
+                if on_substep_accepted is not None:
+                    on_substep_accepted()
+                remaining -= current_dt
+
+                if relative_error <= 1e-16:
+                    growth = 2.0
+                else:
+                    growth = min(2.0, max(1.1, 0.9 * (adaptive_tol / relative_error) ** 0.2))
+                trial_dt = min(adaptive_max_dt, max(adaptive_min_dt, current_dt * growth))
+                continue
+
+            shrink = max(0.2, 0.9 * (adaptive_tol / max(relative_error, 1e-16)) ** 0.25)
+            trial_dt = max(adaptive_min_dt, current_dt * shrink)
+
+        return trial_dt
+
     def _run_loop(self, lines: List[str], start: int) -> int:
         header = lines[start]
         # Updated regex to support optional units on range values: 0..100[days]
+        adaptive_clause = r"(?:\s+adaptive(?:\s+tol\s+([^\s]+))?(?:\s+min\s+([^\s]+))?(?:\s+max\s+([^\s]+))?)?"
         m_orbit = re.fullmatch(
-            r"orbit\s+\w+\s+in\s+(\d+(?:\[[^\]]+\])?)\.\.(\d+(?:\[[^\]]+\])?)\s+dt\s+([^\s]+)(?:\s+integrator\s+(leapfrog|rk4|verlet|euler))?\s*\{",
+            rf"orbit\s+\w+\s+in\s+(\d+(?:\[[^\]]+\])?)\.\.(\d+(?:\[[^\]]+\])?)\s+dt\s+([^\s]+)(?:\s+integrator\s+(leapfrog|rk4|verlet|euler))?{adaptive_clause}\s*\{{",
             header,
         )
         m_sim = re.fullmatch(
-            r"simulate\s+\w+\s+in\s+(\d+(?:\[[^\]]+\])?)\.\.(\d+(?:\[[^\]]+\])?)\s+step\s+([^\s]+)(?:\s+integrator\s+(leapfrog|rk4|verlet|euler))?\s*\{",
+            rf"simulate\s+\w+\s+in\s+(\d+(?:\[[^\]]+\])?)\.\.(\d+(?:\[[^\]]+\])?)\s+step\s+([^\s]+)(?:\s+integrator\s+(leapfrog|rk4|verlet|euler))?{adaptive_clause}\s*\{{",
             header,
         )
         match = m_orbit or m_sim
@@ -1517,6 +1936,15 @@ class GravityInterpreter:
         end = int(self.parse_value(end_str))
         dt = self.parse_value(match.group(3))
         integrator: Integrator = (match.group(4) or "leapfrog").lower()  # type: ignore[assignment]
+        adaptive_enabled = " adaptive" in header
+        adaptive_tol = float(match.group(5) or "1e-6")
+        adaptive_min_dt = self.parse_value(match.group(6) or "0.01[s]")
+        adaptive_max_dt = self.parse_value(match.group(7) or match.group(3))
+        if adaptive_min_dt <= 0 or adaptive_max_dt <= 0:
+            raise ValueError("Adaptive min/max dt must be positive")
+        if adaptive_min_dt > adaptive_max_dt:
+            raise ValueError("Adaptive min dt cannot be larger than max dt")
+        next_dt_hint = min(max(adaptive_min_dt, dt), adaptive_max_dt)
 
         block: List[str] = []
         i = start + 1
@@ -1529,12 +1957,17 @@ class GravityInterpreter:
         self._collect_inline_observers(block)
         has_explicit_step = any(stmt.startswith("step_physics") for stmt in block)
 
+        if self.visualizer:
+            self.visualizer.initialize(self.objects)
+
         step_index = 0
         for _ in range(begin, end):
             step_pairs = list(self.pull_pairs)
             
             # Process configuration statements
             for stmt in block:
+                if self._run_single_statement(stmt):
+                    continue
                 if stmt == "grav all":
                     self._add_gravity_all_pairs()
                     step_pairs = list(self.pull_pairs)
@@ -1563,12 +1996,26 @@ class GravityInterpreter:
 
             # Execute physics step
             if not has_explicit_step:
-                self.physics_backend.step(self.objects, step_pairs, dt, integrator)
-                self._apply_friction(dt)
-                self._resolve_collisions()
+                if adaptive_enabled:
+                    next_dt_hint = self._adaptive_integrate_step(
+                        step_pairs,
+                        dt,
+                        integrator,
+                        adaptive_tol,
+                        adaptive_min_dt,
+                        adaptive_max_dt,
+                        next_dt_hint,
+                        on_substep_accepted=(self.visualizer.update if self.visualizer else None),
+                    )
+                else:
+                    self.physics_backend.step(self.objects, step_pairs, dt, integrator)
+                    self._apply_friction(dt)
+                    self._resolve_collisions()
 
             # Process step_physics and other statements
             for stmt in block:
+                if self._run_single_statement(stmt):
+                    continue
                 if stmt.startswith("step_physics"):
                     pair = self._parse_step_physics(stmt)
                     self.physics_backend.step(self.objects, [pair], dt, integrator)
@@ -1589,9 +2036,8 @@ class GravityInterpreter:
             
             # Update 3D visualization if enabled
             if self.visualizer:
-                if step_index == 0:
-                    self.visualizer.initialize(self.objects)
-                self.visualizer.update(self.objects)
+                if not adaptive_enabled:
+                    self.visualizer.update(self.objects)
                 # Render every N steps to avoid slowdown
                 if step_index % self.visualizer.update_interval == 0:
                     self.visualizer.render(self.objects)
@@ -1686,10 +2132,51 @@ class GravityInterpreter:
         raise ValueError(f"Unsupported print expression: {expr}")
 
 
+
+def get_backend_availability(julia_bin: str = "julia") -> Dict[str, str]:
+    status: Dict[str, str] = {"python": "available"}
+    status["numpy"] = "available" if HAS_NUMPY else "missing dependency: numpy"
+
+    if HAS_NUMPY:
+        try:
+            _ = CppPhysicsBackend()
+            status["cpp"] = "available"
+        except RuntimeError as exc:
+            status["cpp"] = f"unavailable: {exc}"
+    else:
+        status["cpp"] = "unavailable: requires numpy and g++"
+
+    julia = shutil.which(julia_bin)
+    status["julia_diffeq"] = "available" if julia else f"unavailable: julia binary not found at '{julia_bin}'"
+    status["auto"] = f"selected={_default_backend_name(julia_bin=julia_bin)}"
+    return status
+
+def create_physics_backend(name: BackendName, julia_bin: str = "julia") -> PhysicsBackend:
+    if name == "auto":
+        return create_physics_backend(_default_backend_name(julia_bin=julia_bin), julia_bin=julia_bin)
+    if name == "python":
+        return PythonPhysicsBackend()
+    if name == "numpy":
+        return NumPyPhysicsBackend()
+    if name == "cpp":
+        return CppPhysicsBackend()
+    if name == "julia_diffeq":
+        return JuliaDiffEqBackend(julia_bin=julia_bin)
+    raise ValueError(f"Unknown backend: {name}")
+
+
 def run_script_file(script_path: str, enable_3d: bool = False, viz_interval: int = 1, 
-                    create_animation: bool = False, anim_fps: int = 30) -> List[str]:
+                    create_animation: bool = False, anim_fps: int = 30,
+                    backend_name: BackendName = "auto", julia_bin: str = "julia",
+                    show_visualization: bool = True,
+                    export_interactive: bool = False,
+                    interactive_output_file: str = "gravity_interactive_3d.html") -> List[str]:
     script = Path(script_path).read_text(encoding="utf-8")
-    interpreter = GravityInterpreter(enable_3d_viz=enable_3d, viz_interval=viz_interval)
+    interpreter = GravityInterpreter(
+        physics_backend=create_physics_backend(backend_name, julia_bin=julia_bin),
+        enable_3d_viz=enable_3d,
+        viz_interval=viz_interval,
+    )
     output = interpreter.execute(script)
     
     if enable_3d and interpreter.visualizer:
@@ -1698,22 +2185,119 @@ def run_script_file(script_path: str, enable_3d: bool = False, viz_interval: int
             anim_filename = "gravity_animation.gif"
             print(f"\n🎬 Creating animation...")
             interpreter.visualizer.create_animation(
-                interpreter.objects, 
+                interpreter.objects,
                 output_file=anim_filename,
-                fps=anim_fps
+                fps=anim_fps,
             )
-        
-        # Show final visualization
-        interpreter.visualizer.show()  # Keep window open at end
-    
+
+        if export_interactive:
+            html_out = export_interactive_3d_html(
+                interpreter.objects,
+                trajectories=interpreter.visualizer.trajectories,
+                output_file=interactive_output_file,
+            )
+            print(f"Saved interactive 3D viewer: {html_out}")
+
+        # Show final visualization (skip in headless/non-interactive mode)
+        if show_visualization:
+            interpreter.visualizer.show()  # Keep window open at end
+    elif export_interactive:
+        html_out = export_interactive_3d_html(
+            interpreter.objects,
+            trajectories=None,
+            output_file=interactive_output_file,
+        )
+        print(f"Saved interactive 3D viewer: {html_out}")
+
     return output
 
 
-def check_script_file(script_path: str) -> None:
-    run_script_file(script_path)
+def export_interactive_3d_html(
+    objects: Dict[str, Body],
+    trajectories: Dict[str, List[Vec3]] | None = None,
+    output_file: str = "gravity_interactive_3d.html",
+) -> Path:
+    """Export an interactive 3D HTML viewer with object details."""
+    if not HAS_PLOTLY:
+        raise RuntimeError("plotly is required for interactive 3D export. Install it with: pip install plotly")
+
+    trajectories = trajectories or {}
+    fig = go.Figure()
+
+    for name, obj in objects.items():
+        color = obj.color or "#1f77b4"
+        path = trajectories.get(name, [])
+
+        if path:
+            xs = [p[0] for p in path]
+            ys = [p[1] for p in path]
+            zs = [p[2] for p in path]
+            fig.add_trace(
+                go.Scatter3d(
+                    x=xs,
+                    y=ys,
+                    z=zs,
+                    mode="lines",
+                    name=f"{name} trajectory",
+                    line={"width": 3, "color": color},
+                    hoverinfo="skip",
+                    showlegend=False,
+                )
+            )
+
+        px, py, pz = obj.position
+        vx, vy, vz = obj.velocity
+        speed = math.sqrt(vx * vx + vy * vy + vz * vz)
+        details = (
+            f"<b>{name}</b><br>"
+            f"Shape: {obj.shape}<br>"
+            f"Mass: {obj.mass:.6e} kg<br>"
+            f"Radius: {obj.radius:.3f} m<br>"
+            f"Position: ({px:.3f}, {py:.3f}, {pz:.3f}) m<br>"
+            f"Velocity: ({vx:.3f}, {vy:.3f}, {vz:.3f}) m/s<br>"
+            f"Speed: {speed:.3f} m/s"
+        )
+
+        fig.add_trace(
+            go.Scatter3d(
+                x=[px],
+                y=[py],
+                z=[pz],
+                mode="markers+text",
+                text=[name],
+                textposition="top center",
+                name=name,
+                marker={"size": 7, "color": color},
+                hovertemplate=details + "<extra></extra>",
+            )
+        )
+
+    fig.update_layout(
+        title="Gravity-Lang Interactive 3D Viewer",
+        scene={
+            "xaxis_title": "X (m)",
+            "yaxis_title": "Y (m)",
+            "zaxis_title": "Z (m)",
+        },
+        legend={"orientation": "h", "y": 1.02, "x": 0.0},
+        template="plotly_dark",
+        margin={"l": 0, "r": 0, "t": 50, "b": 0},
+    )
+
+    out = Path(output_file)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    fig.write_html(str(out), include_plotlyjs="cdn")
+    return out
 
 
-def build_executable(name: str, outdir: str, auto_install: bool = False, clean: bool = True) -> Path:
+def check_script_file(script_path: str, backend_name: BackendName = "auto", julia_bin: str = "julia") -> None:
+    run_script_file(script_path, backend_name=backend_name, julia_bin=julia_bin)
+
+
+def build_executable(name: str, outdir: str, auto_install: bool = False, clean: bool = True, with_installer: bool = False, install_all_deps: bool = False) -> Path:
+    if install_all_deps:
+        subprocess.run([sys.executable, "-m", "pip", "install", "numpy", "matplotlib", "pillow", "plotly", "pyinstaller"], check=True)
+
     pyinstaller = shutil.which("pyinstaller")
     if not pyinstaller and auto_install:
         subprocess.run([sys.executable, "-m", "pip", "install", "pyinstaller"], check=True)
@@ -1726,16 +2310,176 @@ def build_executable(name: str, outdir: str, auto_install: bool = False, clean: 
     cmd = [
         pyinstaller,
         "--onefile",
+        "--hidden-import",
+        "matplotlib",
+        "--hidden-import",
+        "PIL",
+        "--collect-data",
+        "matplotlib",
+        "--collect-data",
+        "PIL",
         "--name",
         name,
         "--distpath",
         outdir,
         "gravity_lang_interpreter.py",
     ]
+    include_numpy = HAS_NUMPY or install_all_deps
+    include_plotly = HAS_PLOTLY or install_all_deps
+
+    if include_numpy:
+        cmd[2:2] = ["--hidden-import", "numpy"]
+    if include_plotly:
+        cmd[2:2] = ["--hidden-import", "plotly"]
+        cmd[2:2] = ["--collect-data", "plotly"]
     if clean:
         cmd.insert(2, "--clean")
     subprocess.run(cmd, check=True)
-    return Path(outdir) / (f"{name}.exe" if sys.platform.startswith("win") else name)
+    exe_path = Path(outdir) / (f"{name}.exe" if sys.platform.startswith("win") else name)
+    if with_installer and sys.platform.startswith("win"):
+        bundle = create_windows_installer_bundle(exe_path, outdir)
+        print(f"Created installer bundle: {bundle}")
+    return exe_path
+
+
+
+
+def create_windows_installer_bundle(exe_path: Path, outdir: str) -> Path:
+    """Create a simple Windows installer bundle that adds `gravity` to PATH for current user."""
+    bundle_dir = Path(outdir) / "installer-windows"
+    bundle_dir.mkdir(parents=True, exist_ok=True)
+
+    target_exe = bundle_dir / "gravity-lang.exe"
+    shutil.copy2(exe_path, target_exe)
+
+    launcher_cmd = bundle_dir / "gravity.cmd"
+    launcher_cmd.write_text(
+        '@echo off\r\n"%~dp0gravity-lang.exe" %*\r\n',
+        encoding="utf-8",
+    )
+
+    install_ps1 = bundle_dir / "install-gravity.ps1"
+    install_ps1.write_text(
+        r"""$ErrorActionPreference = "Stop"
+$InstallDir = Join-Path $env:LOCALAPPDATA "Programs\Gravity-Lang"
+New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
+
+Copy-Item -Force "$PSScriptRoot\gravity-lang.exe" (Join-Path $InstallDir "gravity-lang.exe")
+Copy-Item -Force "$PSScriptRoot\gravity.cmd" (Join-Path $InstallDir "gravity.cmd")
+
+$UserPath = [Environment]::GetEnvironmentVariable("Path", "User")
+if (-not $UserPath) { $UserPath = "" }
+if ($UserPath -notlike "*${InstallDir}*") {
+    $NewPath = if ([string]::IsNullOrWhiteSpace($UserPath)) { $InstallDir } else { "$UserPath;$InstallDir" }
+    [Environment]::SetEnvironmentVariable("Path", $NewPath, "User")
+}
+
+reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\App Paths\gravity.exe" /ve /d "$InstallDir\gravity-lang.exe" /f | Out-Null
+reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\App Paths\gravity.exe" /v Path /d "$InstallDir" /f | Out-Null
+
+Write-Host "Installed Gravity Lang to $InstallDir"
+Write-Host "Open a new terminal and run: gravity --version"
+""",
+        encoding="utf-8",
+    )
+
+    uninstall_ps1 = bundle_dir / "uninstall-gravity.ps1"
+    uninstall_ps1.write_text(
+        r"""$ErrorActionPreference = "Stop"
+$InstallDir = Join-Path $env:LOCALAPPDATA "Programs\Gravity-Lang"
+if (Test-Path $InstallDir) {
+    Remove-Item -Recurse -Force $InstallDir
+}
+
+$UserPath = [Environment]::GetEnvironmentVariable("Path", "User")
+if ($UserPath) {
+    $parts = $UserPath -split ";" | Where-Object { $_ -and ($_ -ne $InstallDir) }
+    [Environment]::SetEnvironmentVariable("Path", ($parts -join ";"), "User")
+}
+
+reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\App Paths\gravity.exe" /f 2>$null | Out-Null
+Write-Host "Uninstalled Gravity Lang"
+""",
+        encoding="utf-8",
+    )
+
+    readme = bundle_dir / "README-INSTALLER.txt"
+    readme.write_text(
+        r"""Gravity Lang Windows Installer Bundle
+
+1) Right click PowerShell and Run as your user (admin not required)
+2) Run: .\install-gravity.ps1
+3) Open a new terminal and run: gravity --version
+
+To uninstall: .\uninstall-gravity.ps1
+""",
+        encoding="utf-8",
+    )
+
+    return bundle_dir
+
+
+def benchmark_backends(
+    object_count: int = 200,
+    steps: int = 20,
+    dt: float = 1.0,
+    repeats: int = 3,
+    warmup_steps: int = 2,
+    backend_names: List[str] | None = None,
+) -> Dict[str, float]:
+    if object_count < 2:
+        raise ValueError("object_count must be >= 2")
+    if steps < 1 or repeats < 1 or warmup_steps < 0:
+        raise ValueError("steps/repeats must be >= 1 and warmup_steps must be >= 0")
+
+    def build_case() -> tuple[Dict[str, Body], List[Tuple[str, str]]]:
+        objects: Dict[str, Body] = {}
+        for i in range(object_count):
+            objects[f"B{i}"] = Body(
+                name=f"B{i}",
+                shape="pointmass",
+                position=(float(i * 1000), float((i % 13) * 300), float((i % 7) * 200)),
+                velocity=(0.0, 0.0, 0.0),
+                mass=5.0e20 + i * 1.0e17,
+                radius=1.0,
+            )
+        pairs = [(f"B{i}", f"B{j}") for i in range(object_count) for j in range(object_count) if i != j]
+        return objects, pairs
+
+    selected = backend_names or ["python", "numpy", "cpp"]
+    backends: Dict[str, PhysicsBackend] = {}
+    for name in selected:
+        try:
+            backends[name] = create_physics_backend(name)  # type: ignore[arg-type]
+        except Exception:
+            continue
+
+    if "python" not in backends:
+        backends["python"] = PythonPhysicsBackend()
+
+    timings: Dict[str, float] = {}
+    for name, backend in backends.items():
+        objs, pairs = build_case()
+
+        for _ in range(warmup_steps):
+            backend.step(objs, pairs, dt, "verlet")
+
+        samples: List[float] = []
+        for _ in range(repeats):
+            objs, pairs = build_case()
+            start = time.perf_counter()
+            for _ in range(steps):
+                backend.step(objs, pairs, dt, "verlet")
+            samples.append((time.perf_counter() - start) * 1000.0)
+
+        timings[name] = statistics.median(samples)
+        timings[f"{name}_mean_ms"] = statistics.mean(samples)
+
+    baseline = timings.get("python", 1.0)
+    for name, elapsed in list(timings.items()):
+        if name in backends and name != "python":
+            timings[f"{name}_speedup"] = baseline / max(elapsed, 1e-9)
+    return timings
 
 
 def main() -> int:
@@ -1756,9 +2500,35 @@ def main() -> int:
                            help="Create animation from simulation (requires --3d)")
     run_parser.add_argument("--fps", type=int, default=30,
                            help="Animation frames per second (default: 30)")
+    run_parser.add_argument("--backend", choices=["auto", "python", "numpy", "cpp", "julia_diffeq"], default="auto",
+                           help="Physics backend: auto (default prefers cpp), python, numpy, cpp, or julia_diffeq")
+    run_parser.add_argument("--julia-bin", default="julia",
+                           help="Julia binary path when using --backend julia_diffeq")
+    run_parser.add_argument("--headless", action="store_true",
+                           help="Run visualization/animation generation without opening window")
+    run_parser.add_argument("--interactive", dest="interactive_viewer", action="store_true",
+                           help="Export an interactive 3D HTML viewer with object details (requires plotly)")
+    run_parser.add_argument("--interactive-out", default="gravity_interactive_3d.html",
+                           help="Output HTML path for --interactive export")
 
     check_parser = sub.add_parser("check", help="Parse and validate a .gravity script")
     check_parser.add_argument("check_file", help="Path to a .gravity script")
+    check_parser.add_argument("--backend", choices=["auto", "python", "numpy", "cpp", "julia_diffeq"], default="auto",
+                              help="Physics backend used for validation run")
+    check_parser.add_argument("--julia-bin", default="julia",
+                              help="Julia binary path when using --backend julia_diffeq")
+
+    bench_parser = sub.add_parser("benchmark", help="Benchmark physics backends")
+    bench_parser.add_argument("--objects", type=int, default=200, help="Number of objects")
+    bench_parser.add_argument("--steps", type=int, default=20, help="Number of integration steps")
+    bench_parser.add_argument("--dt", type=float, default=1.0, help="Step size in seconds")
+    bench_parser.add_argument("--repeats", type=int, default=3, help="Benchmark repeats (median reported)")
+    bench_parser.add_argument("--warmup", type=int, default=2, help="Warmup steps before timing")
+    bench_parser.add_argument("--backends", default="python,numpy,cpp", help="Comma-separated backends to test")
+    bench_parser.add_argument("--csv-out", default="", help="Optional path to write benchmark CSV")
+
+    backends_parser = sub.add_parser("backends", help="Show backend availability on this machine")
+    backends_parser.add_argument("--julia-bin", default="julia", help="Julia binary path")
 
     exe_parser = sub.add_parser("build-exe", help="Build a standalone v1.0 interpreter executable")
     exe_parser.add_argument("--name", default="gravity-lang-v1.0", help="Executable name")
@@ -1772,6 +2542,16 @@ def main() -> int:
         "--no-clean",
         action="store_true",
         help="Disable PyInstaller clean mode",
+    )
+    exe_parser.add_argument(
+        "--with-installer",
+        action="store_true",
+        help="Windows only: create installer bundle that registers `gravity` command",
+    )
+    exe_parser.add_argument(
+        "--install-all-deps",
+        action="store_true",
+        help="Install full standalone dependency set (numpy/matplotlib/pillow/plotly/pyinstaller) before build",
     )
 
     parser.add_argument("legacy_file", nargs="?", help="Backward-compatible: run a .gravity script directly")
@@ -1789,14 +2569,53 @@ def main() -> int:
             enable_3d=args.enable_3d,
             viz_interval=args.viz_interval,
             create_animation=getattr(args, 'create_animation', False),
-            anim_fps=getattr(args, 'fps', 30)
+            anim_fps=getattr(args, 'fps', 30),
+            backend_name=getattr(args, 'backend', 'python'),
+            julia_bin=getattr(args, 'julia_bin', 'julia'),
+            show_visualization=not getattr(args, 'headless', False),
+            export_interactive=getattr(args, 'interactive_viewer', False),
+            interactive_output_file=getattr(args, 'interactive_out', 'gravity_interactive_3d.html'),
         )
         print("\n".join(output))
         return 0
 
     if args.command == "check":
-        check_script_file(args.check_file)
+        check_script_file(
+            args.check_file,
+            backend_name=getattr(args, 'backend', 'python'),
+            julia_bin=getattr(args, 'julia_bin', 'julia'),
+        )
         print(f"OK: {args.check_file}")
+        return 0
+
+    if args.command == "benchmark":
+        requested = [name.strip() for name in args.backends.split(",") if name.strip()]
+        results = benchmark_backends(
+            object_count=args.objects,
+            steps=args.steps,
+            dt=args.dt,
+            repeats=args.repeats,
+            warmup_steps=args.warmup,
+            backend_names=requested,
+        )
+        print("metric,value")
+        for key, value in results.items():
+            print(f"{key},{value:.6f}")
+        if args.csv_out:
+            out = Path(args.csv_out)
+            out.parent.mkdir(parents=True, exist_ok=True)
+            with out.open("w", encoding="utf-8") as f:
+                f.write("metric,value\n")
+                for key, value in results.items():
+                    f.write(f"{key},{value:.6f}\n")
+            print(f"Saved benchmark CSV: {out}")
+        return 0
+
+    if args.command == "backends":
+        statuses = get_backend_availability(julia_bin=args.julia_bin)
+        print("backend,status")
+        for name, status in statuses.items():
+            print(f"{name},{status}")
         return 0
 
     if args.command == "build-exe":
@@ -1805,12 +2624,14 @@ def main() -> int:
             args.outdir,
             auto_install=args.install_pyinstaller,
             clean=not args.no_clean,
+            with_installer=getattr(args, "with_installer", False),
+            install_all_deps=getattr(args, "install_all_deps", False),
         )
         print(f"Built executable: {output_path}")
         return 0
 
     if args.legacy_file:
-        output = run_script_file(args.legacy_file)
+        output = run_script_file(args.legacy_file, backend_name="auto")
         print("\n".join(output))
         return 0
 

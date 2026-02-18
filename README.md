@@ -27,8 +27,10 @@ simulate t in 0..28 step 3600[s] integrator verlet {
 ## 🚀 Features
 
 - **🎯 Simple Syntax** - No boilerplate, just physics
-- **⚡ Fast** - NumPy backend for 10x-50x speedup on large simulations
-- **🔬 Scientific** - 4 integrators (Leapfrog, RK4, Verlet, Euler), orbital elements
+- **🧠 Control Flow** - `let` variables and inline `if ... then ...` conditions
+- **⚡ Fast** - NumPy + optional C++ kernel backend for major speedups on large simulations
+- **🔬 Scientific** - Adaptive timestep support + 4 integrators (Leapfrog, RK4, Verlet, Euler)
+- **🧪 Advanced Solvers** - Optional Julia DifferentialEquations.jl backend (Tsit5)
 - **✅ Accurate** - Validated against NASA data with < 2% error
 - **🎨 Flexible** - Custom gravity laws (Newtonian, MOND, GR corrections)
 - **📊 Data Export** - CSV streaming for analysis
@@ -88,29 +90,61 @@ python gravity_lang_interpreter.py run examples/moon_orbit.gravity
 pip install pyinstaller numpy
 
 # Build executable for your platform
-python gravity_lang_interpreter.py build-exe --name gravity-lang --outdir dist
+python gravity_lang_interpreter.py build-exe --name gravity-lang --outdir dist --install-all-deps
 
 # Run it
 ./dist/gravity-lang run examples/solar_system.gravity         # Linux/macOS
 .\dist\gravity-lang.exe run examples\solar_system.gravity     # Windows
 ```
-pip install pyinstaller numpy
 
-# Build executable
-python gravity_lang_interpreter.py build-exe --name gravity-lang --outdir dist
+**Windows UX installer bundle (adds `gravity` command to PATH):**
 
-# Run it
-./dist/gravity-lang run examples/solar_system.gravity
+```powershell
+python gravity_lang_interpreter.py build-exe --name gravity-lang-windows --outdir dist --with-installer
+cd dist\installer-windows
+.\install-gravity.ps1
+# Open a new terminal, then:
+gravity --version
 ```
+
+### Interactive 3D GUI/Viewer (HTML)
+
+```bash
+# Export interactive 3D model with hover details (mass, radius, velocity, position)
+python gravity_lang_interpreter.py run examples/moon_orbit.gravity --3d --headless --interactive --interactive-out artifacts/gravity_interactive_3d.html
+```
+
+Open the generated HTML file in a browser to rotate/zoom/pan and inspect object details.
+
+For more accurate GIF paths, prefer smaller simulation timesteps or adaptive mode in your script (e.g. `adaptive tol 1e-7 min 10[s] max 3600[s]`).
 
 ### Install as Python Package (Optional)
 
 ```bash
 pip install numpy       # For high-performance backend
 pip install matplotlib  # For 3D visualization
+# Optional: Julia + DifferentialEquations.jl + JSON for julia_diffeq backend
+```
+
+Backend selection:
+
+```bash
+# default is --backend auto (prefers cpp, then numpy, then julia_diffeq if julia exists, then python)
+python gravity_lang_interpreter.py run examples/solar_system.gravity
+python gravity_lang_interpreter.py run examples/solar_system.gravity --backend numpy
+python gravity_lang_interpreter.py run examples/solar_system.gravity --backend cpp
+python gravity_lang_interpreter.py run examples/solar_system.gravity --backend julia_diffeq --julia-bin julia
+```
+
+Performance benchmark (proves speedup on your machine):
+
+```bash
+python gravity_lang_interpreter.py benchmark --objects 200 --steps 20 --dt 1
 ```
 
 ### 🎨 3D Visualization (NEW!)
+
+Build executable now bundles matplotlib/Pillow resources for visualization + animation export.
 
 Enable real-time 3D visualization with matplotlib:
 
@@ -138,6 +172,8 @@ Create stunning animations from your simulations:
 ```bash
 # Create animated GIF
 python gravity_lang_interpreter.py run examples/galaxy_collision.gravity --3d --animate
+# CI/headless export (no GUI window)
+python gravity_lang_interpreter.py run examples/moon_orbit.gravity --3d --animate --headless
 
 # Adjust frame rate (default: 30 fps)
 python gravity_lang_interpreter.py run examples/moon_orbit.gravity --3d --animate --fps 60
@@ -281,9 +317,23 @@ integrator verlet    # Excellent energy conservation
 integrator euler     # Fast but less accurate
 ```
 
+Adaptive timestep for better energy control in long runs:
+
+```gravity
+simulate t in 0..365[days] step 1[days] integrator verlet adaptive tol 1e-7 min 60[s] max 1[days] {
+    grav all
+}
+```
+
 ### 6. Physics Controls
 
 ```gravity
+# Variables
+let burn = 15[m/s]
+
+# Conditionals
+if burn > 10[m/s] then thrust Probe by [0,burn,0]
+
 # Friction/drag
 friction 0.000001
 
@@ -456,7 +506,7 @@ Run the comprehensive test suite:
 python -m unittest discover -s tests -v
 ```
 
-All 26 tests cover:
+All tests cover:
 - Core language features
 - All 4 integrators
 - Vector operations
@@ -468,17 +518,26 @@ All 26 tests cover:
 ## 🛠️ CLI Commands
 
 ```bash
-# Run a script
+# Run a script (auto backend prefers cpp by default)
 python gravity_lang_interpreter.py run examples/moon_orbit.gravity
 
 # Validate syntax
 python gravity_lang_interpreter.py check examples/solar_system.gravity
 
+# Show backend availability on this machine
+python gravity_lang_interpreter.py backends
+
+# Benchmark selected backends with warmup/repeats and CSV export
+python gravity_lang_interpreter.py benchmark --objects 200 --steps 20 --repeats 5 --warmup 3 --backends python,numpy,cpp --csv-out artifacts/bench.csv
+
 # Show version
 python gravity_lang_interpreter.py --version
 
+# Headless animation export (great for CI/social media content)
+python gravity_lang_interpreter.py run examples/moon_orbit.gravity --3d --animate --headless
+
 # Build standalone executable
-python gravity_lang_interpreter.py build-exe --name gravity-lang --outdir dist
+python gravity_lang_interpreter.py build-exe --name gravity-lang --outdir dist --install-all-deps
 ```
 
 ---
@@ -512,8 +571,10 @@ python gravity_lang_interpreter.py build-exe --name gravity-lang --outdir dist
 - **Frontend**: Python parser and interpreter
 - **Physics Backends**: 
   - `PythonPhysicsBackend` - Pure Python (portable)
-  - `NumPyPhysicsBackend` - Vectorized (10x-50x faster)
-- **Future**: C++ kernel, GPU acceleration, distributed computing
+  - `NumPyPhysicsBackend` - Vectorized acceleration
+  - `CppPhysicsBackend` - Native kernel via `g++` + `ctypes`
+  - `JuliaDiffEqBackend` - DifferentialEquations.jl (optional)
+- **Future**: GPU acceleration, distributed computing
 
 ---
 
@@ -521,18 +582,18 @@ python gravity_lang_interpreter.py build-exe --name gravity-lang --outdir dist
 
 ### v1.5 (Next Release)
 
-- [ ] Variables: `let G = 6.67e-11`
+- [x] Variables: `let x = 10`
 - [ ] Better error messages with line numbers
 - [ ] More print options: `print Earth.speed`, `print Moon.distance`
-- [ ] Conditional statements: `if ... then ... end`
+- [x] Conditional statements: `if ... then ...`
 - [ ] Functions/macros for reusable code
 
 ### v2.0 (Future)
 
-- [ ] C++ physics kernel (100x speedup)
+- [ ] C++ kernel v2 optimization pass (SIMD + multithreading)
 - [ ] GPU acceleration with CuPy/CUDA (1000x speedup)
 - [ ] Real-time 3D visualization
-- [ ] Adaptive timestep control
+- [ ] Adaptive timestep presets + auto-tuning
 - [ ] Distributed computing backend
 
 ---
