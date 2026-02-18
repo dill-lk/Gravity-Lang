@@ -33,7 +33,7 @@ jobs:
         dist\gravity-lang-windows.exe --version
     
     - name: Upload Windows executable
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: gravity-lang-windows
         path: dist/gravity-lang-windows.exe
@@ -64,7 +64,7 @@ jobs:
         ./dist/gravity-lang-linux --version
     
     - name: Upload Linux executable
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: gravity-lang-linux
         path: dist/gravity-lang-linux
@@ -95,7 +95,7 @@ jobs:
         ./dist/gravity-lang-macos --version
     
     - name: Upload macOS executable
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: gravity-lang-macos
         path: dist/gravity-lang-macos
