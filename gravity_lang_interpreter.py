@@ -2482,6 +2482,69 @@ def benchmark_backends(
     return timings
 
 
+def benchmark_backends(
+    object_count: int = 200,
+    steps: int = 20,
+    dt: float = 1.0,
+    repeats: int = 3,
+    warmup_steps: int = 2,
+    backend_names: List[str] | None = None,
+) -> Dict[str, float]:
+    if object_count < 2:
+        raise ValueError("object_count must be >= 2")
+    if steps < 1 or repeats < 1 or warmup_steps < 0:
+        raise ValueError("steps/repeats must be >= 1 and warmup_steps must be >= 0")
+
+    def build_case() -> tuple[Dict[str, Body], List[Tuple[str, str]]]:
+        objects: Dict[str, Body] = {}
+        for i in range(object_count):
+            objects[f"B{i}"] = Body(
+                name=f"B{i}",
+                shape="pointmass",
+                position=(float(i * 1000), float((i % 13) * 300), float((i % 7) * 200)),
+                velocity=(0.0, 0.0, 0.0),
+                mass=5.0e20 + i * 1.0e17,
+                radius=1.0,
+            )
+        pairs = [(f"B{i}", f"B{j}") for i in range(object_count) for j in range(object_count) if i != j]
+        return objects, pairs
+
+    selected = backend_names or ["python", "numpy", "cpp"]
+    backends: Dict[str, PhysicsBackend] = {}
+    for name in selected:
+        try:
+            backends[name] = create_physics_backend(name)  # type: ignore[arg-type]
+        except Exception:
+            continue
+
+    if "python" not in backends:
+        backends["python"] = PythonPhysicsBackend()
+
+    timings: Dict[str, float] = {}
+    for name, backend in backends.items():
+        objs, pairs = build_case()
+
+        for _ in range(warmup_steps):
+            backend.step(objs, pairs, dt, "verlet")
+
+        samples: List[float] = []
+        for _ in range(repeats):
+            objs, pairs = build_case()
+            start = time.perf_counter()
+            for _ in range(steps):
+                backend.step(objs, pairs, dt, "verlet")
+            samples.append((time.perf_counter() - start) * 1000.0)
+
+        timings[name] = statistics.median(samples)
+        timings[f"{name}_mean_ms"] = statistics.mean(samples)
+
+    baseline = timings.get("python", 1.0)
+    for name, elapsed in list(timings.items()):
+        if name in backends and name != "python":
+            timings[f"{name}_speedup"] = baseline / max(elapsed, 1e-9)
+    return timings
+
+
 def main() -> int:
     import argparse
 
