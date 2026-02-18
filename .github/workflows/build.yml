@@ -42,19 +42,11 @@ jobs:
       - name: Run tests
         run: python -m pytest -q
 
-      - name: Validate advanced CLI (POSIX)
-        if: runner.os != 'Windows'
+      - name: Validate advanced CLI
         run: |
           python gravity_lang_interpreter.py backends
           python gravity_lang_interpreter.py benchmark --objects 40 --steps 3 --repeats 2 --warmup 1 --backends python,numpy
           python gravity_lang_interpreter.py run examples/moon_orbit.gravity --backend auto --3d --animate --fps 8 --headless
-
-      - name: Validate advanced CLI (Windows-safe)
-        if: runner.os == 'Windows'
-        run: |
-          python gravity_lang_interpreter.py backends
-          python gravity_lang_interpreter.py benchmark --objects 40 --steps 3 --repeats 2 --warmup 1 --backends python,numpy
-          python gravity_lang_interpreter.py run examples/moon_orbit.gravity --backend auto --headless
 
   detect-changes:
     name: Detect relevant source changes
