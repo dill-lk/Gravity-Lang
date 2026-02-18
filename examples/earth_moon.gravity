@@ -1,0 +1,10 @@
+# 3D orbital setup with explicit velocity assignment and step_physics.
+sphere Earth at [0,0,0] radius 6371[km] mass 5.972e24[kg] fixed
+sphere Moon at [384400,0,0][km] radius 1737[km] mass 7.348e22[kg]
+
+Moon.velocity = [0,1.022,0][km/s]
+
+orbit t in 0..24 dt 3600[s] integrator rk4 {
+    step_physics(Moon, Earth)
+    print Moon.position
+}
