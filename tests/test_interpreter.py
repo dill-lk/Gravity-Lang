@@ -3,10 +3,14 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from gravity_lang_interpreter import GravityInterpreter, Quantity, build_executable, main
-import unittest
-
-from gravity_lang_interpreter import GravityInterpreter, Quantity
+from gravity_lang_interpreter import (
+    GravityInterpreter,
+    Quantity,
+    build_executable,
+    create_physics_backend,
+    benchmark_backends,
+    main,
+)
 
 
 class InterpreterTests(unittest.TestCase):
@@ -360,6 +364,50 @@ class InterpreterTests(unittest.TestCase):
         # Each iteration is 1 day = 86400 seconds
         # Range 0..10[days] = 0..864000 seconds, so roughly 10 iterations with step 86400
         self.assertTrue(len(output) >= 10)
+
+    def test_adaptive_timestep_loop_syntax(self):
+        src = """
+        sphere Earth at [0,0,0] mass 5.972e24[kg] fixed
+        sphere Moon at [384400,0,0][km] mass 7.348e22[kg] velocity [0,1.022,0][km/s]
+        orbit t in 0..3 dt 3600[s] integrator verlet adaptive tol 1e-7 min 10[s] max 3600[s] {
+            Earth pull Moon
+            print Moon.position
+        }
+        """
+        interp = GravityInterpreter()
+        output = interp.execute(src)
+        self.assertEqual(len(output), 3)
+
+
+    def test_backend_factory_auto(self):
+        backend = create_physics_backend("auto")
+        self.assertIsNotNone(backend)
+    def test_backend_factory_python(self):
+        backend = create_physics_backend("python")
+        self.assertIsNotNone(backend)
+
+    def test_backend_factory_numpy_or_fail_cleanly(self):
+        try:
+            backend = create_physics_backend("numpy")
+            self.assertIsNotNone(backend)
+        except RuntimeError as exc:
+            self.assertIn("NumPy", str(exc))
+
+    def test_variables_and_conditionals(self):
+        src = """
+        sphere Probe at [0,0,0] mass 1[kg]
+        let burn = 5
+        if burn > 1 then thrust Probe by [0,burn,0]
+        print Probe.velocity
+        """
+        interp = GravityInterpreter()
+        out = interp.execute(src)
+        self.assertEqual(out[0], "Probe.velocity=(0.0, 5.0, 0.0)")
+
+    def test_benchmark_backends_returns_python(self):
+        result = benchmark_backends(object_count=10, steps=2, dt=0.1)
+        self.assertIn("python", result)
+        self.assertGreater(result["python"], 0.0)
 
 
 if __name__ == "__main__":

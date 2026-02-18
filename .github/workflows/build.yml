@@ -1,101 +1,95 @@
-name: Build Multi-Platform Executables
+name: Build and Test
 
 on:
   push:
-    tags:
-      - 'v*'
+    branches: [ main, master ]
+    tags: [ 'v*' ]
+  pull_request:
   workflow_dispatch:
 
 jobs:
-  build-windows:
-    name: Build Windows Executable
-    runs-on: windows-latest
-    
-    steps:
-    - uses: actions/checkout@v3
-    
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.12'
-    
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install pyinstaller numpy matplotlib
-    
-    - name: Build Windows executable
-      run: |
-        python gravity_lang_interpreter.py build-exe --name gravity-lang-windows --outdir dist
-    
-    - name: Test executable
-      run: |
-        dist\gravity-lang-windows.exe --version
-    
-    - name: Upload Windows executable
-      uses: actions/upload-artifact@v4
-      with:
-        name: gravity-lang-windows
-        path: dist/gravity-lang-windows.exe
+  test:
+    name: Test (${{ matrix.os }}, py${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ['3.10', '3.12']
 
-  build-linux:
-    name: Build Linux Executable
-    runs-on: ubuntu-latest
-    
     steps:
-    - uses: actions/checkout@v3
-    
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.12'
-    
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install pyinstaller numpy matplotlib
-    
-    - name: Build Linux executable
-      run: |
-        python gravity_lang_interpreter.py build-exe --name gravity-lang-linux --outdir dist
-    
-    - name: Test executable
-      run: |
-        ./dist/gravity-lang-linux --version
-    
-    - name: Upload Linux executable
-      uses: actions/upload-artifact@v4
-      with:
-        name: gravity-lang-linux
-        path: dist/gravity-lang-linux
+      - uses: actions/checkout@v4
 
-  build-macos:
-    name: Build macOS Executable
-    runs-on: macos-latest
-    
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install numpy pytest
+
+      - name: Run tests
+        run: python -m pytest -q
+
+      - name: Validate advanced CLI
+        run: |
+          python gravity_lang_interpreter.py backends
+          python gravity_lang_interpreter.py benchmark --objects 40 --steps 3 --repeats 2 --warmup 1 --backends python,numpy
+
+  build:
+    name: Build executable (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    needs: test
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            exe_name: gravity-lang-windows
+            artifact_path: dist/gravity-lang-windows.exe
+          - os: ubuntu-latest
+            exe_name: gravity-lang-linux
+            artifact_path: dist/gravity-lang-linux
+          - os: macos-latest
+            exe_name: gravity-lang-macos
+            artifact_path: dist/gravity-lang-macos
+
     steps:
-    - uses: actions/checkout@v3
-    
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.12'
-    
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install pyinstaller numpy matplotlib
-    
-    - name: Build macOS executable
-      run: |
-        python gravity_lang_interpreter.py build-exe --name gravity-lang-macos --outdir dist
-    
-    - name: Test executable
-      run: |
-        ./dist/gravity-lang-macos --version
-    
-    - name: Upload macOS executable
-      uses: actions/upload-artifact@v4
-      with:
-        name: gravity-lang-macos
-        path: dist/gravity-lang-macos
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller numpy matplotlib
+
+      - name: Build executable
+        run: python gravity_lang_interpreter.py build-exe --name ${{ matrix.exe_name }} --outdir dist
+
+      - name: Smoke test executable (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: .\dist\${{ matrix.exe_name }}.exe --version
+
+      - name: Smoke test executable (POSIX)
+        if: runner.os != 'Windows'
+        run: ./dist/${{ matrix.exe_name }} --version
+
+      - name: Upload executable artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.exe_name }}
+          path: ${{ matrix.artifact_path }}
+
+      - name: Upload dist directory snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.exe_name }}
+          path: dist/**
