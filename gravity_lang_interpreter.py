@@ -261,15 +261,29 @@ class Observer:
 
 
 class Visualizer3D:
-    """3D visualization for gravitational simulations using matplotlib."""
+    """3D visualization for gravitational simulations using matplotlib.
     
-    def __init__(self, title: str = "Gravity Simulation"):
+    Color format: Accepts matplotlib-compatible color names (e.g., 'blue', 'red')
+    or hex codes (e.g., '#0000FF'). See matplotlib.colors for valid names.
+    """
+    
+    # Default color palette for objects without explicit colors
+    DEFAULT_COLOR_PALETTE = ['blue', 'red', 'green', 'orange', 'purple', 'cyan', 'magenta', 'yellow']
+    
+    # Sphere size constants for visualization
+    MIN_SPHERE_SIZE = 20
+    MAX_SPHERE_SIZE = 200
+    BASE_SPHERE_SIZE = 50
+    SIZE_SCALE_FACTOR = 20
+    
+    def __init__(self, title: str = "Gravity Simulation", output_file: str = "gravity_simulation_3d.png"):
         if not HAS_MATPLOTLIB:
             raise RuntimeError(
                 "matplotlib is required for 3D visualization. "
                 "Install it with: pip install matplotlib"
             )
         self.title = title
+        self.output_file = output_file
         self.fig = None
         self.ax = None
         self.trajectories: Dict[str, List[Vec3]] = {}
@@ -293,9 +307,8 @@ class Visualizer3D:
             if hasattr(obj, 'color') and obj.color:
                 self.colors[name] = obj.color
             else:
-                # Default color palette
-                default_colors = ['blue', 'red', 'green', 'orange', 'purple', 'cyan', 'magenta', 'yellow']
-                self.colors[name] = default_colors[len(self.colors) % len(default_colors)]
+                # Assign from default color palette
+                self.colors[name] = self.DEFAULT_COLOR_PALETTE[len(self.colors) % len(self.DEFAULT_COLOR_PALETTE)]
     
     def update(self, objects: Dict[str, Body]) -> None:
         """Update trajectories with current positions."""
@@ -335,7 +348,11 @@ class Visualizer3D:
             x, y, z = obj.position
             color = self.colors.get(name, 'gray')
             # Size based on mass (logarithmic scale for better visibility)
-            size = max(20, min(200, 50 + 20 * math.log10(obj.mass + 1)))
+            size = max(
+                self.MIN_SPHERE_SIZE,
+                min(self.MAX_SPHERE_SIZE, 
+                    self.BASE_SPHERE_SIZE + self.SIZE_SCALE_FACTOR * math.log10(obj.mass + 1))
+            )
             self.ax.scatter([x], [y], [z], color=color, s=size, 
                           marker='o', edgecolors='black', linewidth=0.5, label=name)
         
@@ -369,11 +386,16 @@ class Visualizer3D:
         if self.fig:
             plt.show()
     
-    def save(self, filename: str) -> None:
-        """Save the current plot to a file."""
+    def save(self, filename: str | None = None) -> None:
+        """Save the current plot to a file.
+        
+        Args:
+            filename: Output filename. If None, uses self.output_file.
+        """
         if self.fig:
-            plt.savefig(filename, dpi=150, bbox_inches='tight')
-            print(f"Saved visualization to {filename}")
+            output = filename or self.output_file
+            plt.savefig(output, dpi=150, bbox_inches='tight')
+            print(f"Saved visualization to {output}")
 
 
 class GravityLaw(Protocol):
@@ -1324,7 +1346,7 @@ class GravityInterpreter:
         # Show final visualization if enabled
         if self.visualizer:
             self.visualizer.render(self.objects)
-            self.visualizer.save("gravity_simulation_3d.png")
+            self.visualizer.save()  # Uses self.output_file from constructor
         
         return i + 1
 
