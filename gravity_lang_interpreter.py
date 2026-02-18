@@ -847,10 +847,13 @@ class GravityInterpreter:
                 i += 1
             elif " pull " in line:
                 a, _, b = line.partition(" pull ")
-                source_name, target_name = a.strip(), b.strip()
+                source_name = a.strip()
+                # Split by comma and strip whitespace to support multiple objects
+                target_names = [t.strip() for t in b.split(",")]
                 self._require_object(source_name, "pull statement")
-                self._require_object(target_name, "pull statement")
-                self.pull_pairs.add((source_name, target_name))
+                for target_name in target_names:
+                    self._require_object(target_name, "pull statement")
+                    self.pull_pairs.add((source_name, target_name))
                 i += 1
             elif line.startswith(("orbit ", "simulate ")):
                 i = self._run_loop(lines, i)
@@ -1080,20 +1083,24 @@ class GravityInterpreter:
 
     def _run_loop(self, lines: List[str], start: int) -> int:
         header = lines[start]
+        # Updated regex to support optional units on range values: 0..100[days]
         m_orbit = re.fullmatch(
-            r"orbit\s+\w+\s+in\s+(\d+)\.\.(\d+)\s+dt\s+([^\s]+)(?:\s+integrator\s+(leapfrog|rk4|verlet|euler))?\s*\{",
+            r"orbit\s+\w+\s+in\s+(\d+(?:\[[^\]]+\])?)\.\.(\d+(?:\[[^\]]+\])?)\s+dt\s+([^\s]+)(?:\s+integrator\s+(leapfrog|rk4|verlet|euler))?\s*\{",
             header,
         )
         m_sim = re.fullmatch(
-            r"simulate\s+\w+\s+in\s+(\d+)\.\.(\d+)\s+step\s+([^\s]+)(?:\s+integrator\s+(leapfrog|rk4|verlet|euler))?\s*\{",
+            r"simulate\s+\w+\s+in\s+(\d+(?:\[[^\]]+\])?)\.\.(\d+(?:\[[^\]]+\])?)\s+step\s+([^\s]+)(?:\s+integrator\s+(leapfrog|rk4|verlet|euler))?\s*\{",
             header,
         )
         match = m_orbit or m_sim
         if not match:
             raise ValueError(f"Invalid loop statement: {header}")
 
-        begin = int(match.group(1))
-        end = int(match.group(2))
+        # Parse range values which may include units
+        begin_str = match.group(1)
+        end_str = match.group(2)
+        begin = int(self.parse_value(begin_str))
+        end = int(self.parse_value(end_str))
         dt = self.parse_value(match.group(3))
         integrator: Integrator = (match.group(4) or "leapfrog").lower()  # type: ignore[assignment]
 
@@ -1129,13 +1136,16 @@ class GravityInterpreter:
                     continue
                 if " pull " in stmt:
                     a, _, b = stmt.partition(" pull ")
-                    source_name, target_name = a.strip(), b.strip()
+                    source_name = a.strip()
+                    # Split by comma and strip whitespace to support multiple objects
+                    target_names = [t.strip() for t in b.split(",")]
                     self._require_object(source_name, "pull statement")
-                    self._require_object(target_name, "pull statement")
-                    pair = (source_name, target_name)
-                    self.pull_pairs.add(pair)
-                    if pair not in step_pairs:
-                        step_pairs.append(pair)
+                    for target_name in target_names:
+                        self._require_object(target_name, "pull statement")
+                        pair = (source_name, target_name)
+                        self.pull_pairs.add(pair)
+                        if pair not in step_pairs:
+                            step_pairs.append(pair)
 
             # Execute physics step
             if not has_explicit_step:
