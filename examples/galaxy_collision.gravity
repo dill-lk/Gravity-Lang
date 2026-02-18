@@ -1,0 +1,70 @@
+# =========================================================
+# GALAXY COLLISION SIMULATION
+# =========================================================
+# Demonstrates:
+# - Comma-separated pull syntax for cleaner code
+# - Multiple gravitational interactions
+# - Color-coded visualization (use --3d flag)
+# - Simplified N-body simulation
+# =========================================================
+
+# --- GALAXY A: "Milky Way" (Blue Galaxy) ---
+# Central supermassive black hole
+sphere MilkyWay_Core at [0, 0, 0][km] mass 4.0e36[kg] radius 1e9[km] color "cyan" fixed
+
+# Spiral arm stars (3 stars in orbital motion)
+sphere StarA1 at [2.0e14, 0, 0][km] mass 2.0e30[kg] velocity [0, 220000, 0][m/s] color "lightblue"
+sphere StarA2 at [-2.0e14, 0, 0][km] mass 2.0e30[kg] velocity [0, -220000, 0][m/s] color "lightblue"
+sphere StarA3 at [0, 2.0e14, 0][km] mass 1.8e30[kg] velocity [-220000, 0, 0][m/s] color "deepskyblue"
+
+# --- GALAXY B: "Andromeda" (Red Galaxy) ---
+# Central supermassive black hole approaching from distance
+sphere Andromeda_Core at [8.0e14, 0, 0][km] mass 5.0e36[kg] radius 1e9[km] velocity [-100000, 0, 0][m/s] color "magenta"
+
+# Spiral arm stars (3 stars in orbital motion around Andromeda core)
+sphere StarB1 at [1.0e15, 0, 0][km] mass 2.2e30[kg] velocity [-100000, 250000, 0][m/s] color "pink"
+sphere StarB2 at [6.0e14, 0, 0][km] mass 2.2e30[kg] velocity [-100000, -250000, 0][m/s] color "pink"
+sphere StarB3 at [8.0e14, 2.0e14, 0][km] mass 2.0e30[kg] velocity [-350000, 0, 0][m/s] color "hotpink"
+
+# =========================================================
+# GRAVITATIONAL INTERACTIONS
+# Using comma-separated pull syntax for cleaner code!
+# =========================================================
+
+# Galactic cores attract each other
+MilkyWay_Core pull Andromeda_Core
+Andromeda_Core pull MilkyWay_Core
+
+# Milky Way core attracts all Milky Way stars (comma-separated!)
+MilkyWay_Core pull StarA1, StarA2, StarA3
+
+# Andromeda core attracts all Andromeda stars (comma-separated!)
+Andromeda_Core pull StarB1, StarB2, StarB3
+
+# Note: For full simulation, add cross-galaxy interactions
+# MilkyWay_Core pull StarB1, StarB2, StarB3
+# Andromeda_Core pull StarA1, StarA2, StarA3
+
+# =========================================================
+# SIMULATION
+# =========================================================
+# Short simulation for demonstration (10 steps)
+# For longer simulations, increase to 10000[days] or more
+# Use Verlet integrator for energy conservation
+
+simulate t in 0..10 step 1[day] integrator verlet {
+    print MilkyWay_Core.position
+    print Andromeda_Core.position
+}
+
+# =========================================================
+# HOW TO RUN:
+# =========================================================
+# Basic run:
+#   python gravity_lang_interpreter.py run examples/galaxy_collision.gravity
+#
+# With 3D visualization (requires matplotlib):
+#   python gravity_lang_interpreter.py run examples/galaxy_collision.gravity --3d
+#
+# The simulation will save a 3D plot as 'gravity_simulation_3d.png'
+# =========================================================

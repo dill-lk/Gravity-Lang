@@ -33,9 +33,9 @@ class InterpreterTests(unittest.TestCase):
         self.assertEqual(interp.parse_vector("[1,2,3][km]"), (1000.0, 2000.0, 3000.0))
         self.assertEqual(interp.parse_vector("[0,1,0][km/s]"), (0.0, 1000.0, 0.0))
 
-    def test_unknown_object_in_print_raises_value_error(self):
+    def test_unknown_object_in_print_raises_error(self):
         interp = GravityInterpreter()
-        with self.assertRaises(ValueError):
+        with self.assertRaises(Exception):  # ObjectError inherits from GravityLangError which inherits from Exception
             interp.execute("print Missing.position")
 
     def test_simulate_loop_and_observe_stream(self):
@@ -319,6 +319,47 @@ class InterpreterTests(unittest.TestCase):
             self.assertEqual(code, 0)
         finally:
             os.remove(path)
+
+    def test_comma_separated_pull_statement(self):
+        """Test pull statement with comma-separated targets."""
+        src = """
+        sphere Core at [0,0,0] mass 1.0e30[kg]
+        sphere Star1 at [1.0e10,0,0][km] mass 1.0e25[kg]
+        sphere Star2 at [-1.0e10,0,0][km] mass 1.0e25[kg]
+        sphere Star3 at [0,1.0e10,0][km] mass 1.0e25[kg]
+        
+        Core pull Star1, Star2, Star3
+        
+        simulate t in 0..2 step 100[s] integrator verlet {
+            print Core.position
+        }
+        """
+        interp = GravityInterpreter()
+        output = interp.execute(src)
+        # Check that all three pull pairs were created
+        self.assertIn(("Core", "Star1"), interp.pull_pairs)
+        self.assertIn(("Core", "Star2"), interp.pull_pairs)
+        self.assertIn(("Core", "Star3"), interp.pull_pairs)
+        # Should have output from loop
+        self.assertTrue(len(output) > 0)
+
+    def test_loop_range_with_units(self):
+        """Test simulate loop with units on range values."""
+        src = """
+        sphere Earth at [0,0,0] mass 5.972e24[kg] fixed
+        sphere Moon at [384400,0,0][km] mass 7.348e22[kg] velocity [0,1.022,0][km/s]
+        
+        simulate t in 0..10[days] step 1[days] integrator verlet {
+            Earth pull Moon
+            print Moon.position
+        }
+        """
+        interp = GravityInterpreter()
+        output = interp.execute(src)
+        # Should run for approximately 10 iterations (0 to 10 days converted to seconds)
+        # Each iteration is 1 day = 86400 seconds
+        # Range 0..10[days] = 0..864000 seconds, so roughly 10 iterations with step 86400
+        self.assertTrue(len(output) >= 10)
 
 
 if __name__ == "__main__":

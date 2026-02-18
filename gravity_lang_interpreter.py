@@ -18,6 +18,66 @@ except ImportError:
     np = None  # type: ignore
     HAS_NUMPY = False
 
+# Optional matplotlib support for 3D visualization
+try:
+    import matplotlib.pyplot as plt
+    from mpl_toolkits.mplot3d import Axes3D
+    HAS_MATPLOTLIB = True
+except ImportError:
+    plt = None  # type: ignore
+    HAS_MATPLOTLIB = False
+
+
+# ============================================================================
+# Custom Exception Classes for Better Error Handling
+# ============================================================================
+
+class GravityLangError(Exception):
+    """Base exception for all Gravity-Lang errors."""
+    def __init__(self, message: str, suggestion: str = "", line_number: int | None = None):
+        self.message = message
+        self.suggestion = suggestion
+        self.line_number = line_number
+        super().__init__(self._format_message())
+    
+    def _format_message(self) -> str:
+        """Format error message with colors and suggestions."""
+        parts = []
+        if self.line_number is not None:
+            parts.append(f"❌ Error on line {self.line_number}")
+        else:
+            parts.append("❌ Error")
+        parts.append(f"\n  {self.message}")
+        if self.suggestion:
+            parts.append(f"\n\n💡 Suggestion: {self.suggestion}")
+        return "".join(parts)
+
+
+class ParseError(GravityLangError):
+    """Exception raised for syntax/parsing errors."""
+    pass
+
+
+class SimulationError(GravityLangError):
+    """Exception raised during simulation execution."""
+    pass
+
+
+class UnitError(GravityLangError):
+    """Exception raised for unit-related errors."""
+    pass
+
+
+class ObjectError(GravityLangError):
+    """Exception raised for object-related errors (missing, duplicate, etc.)."""
+    pass
+
+
+class ValidationError(GravityLangError):
+    """Exception raised for validation errors (negative mass, etc.)."""
+    pass
+
+
 G = 6.67430e-11
 GRAVITY_LANG_VERSION = "1.0.0"
 
@@ -239,6 +299,7 @@ class Body:
     mass: float = 1.0
     radius: float = 1.0
     fixed: bool = False
+    color: str = ""  # Optional color for visualization
     properties: Dict[str, float] = field(default_factory=dict)
 
 
@@ -248,6 +309,305 @@ class Observer:
     field_name: str
     file_path: str
     frequency: int
+
+
+class Visualizer3D:
+    """3D visualization for gravitational simulations using matplotlib.
+    
+    Color format: Accepts matplotlib-compatible color names (e.g., 'blue', 'red')
+    or hex codes (e.g., '#0000FF'). See matplotlib.colors for valid names.
+    """
+    
+    # Default color palette for objects without explicit colors
+    DEFAULT_COLOR_PALETTE = ['blue', 'red', 'green', 'orange', 'purple', 'cyan', 'magenta', 'yellow']
+    
+    # Sphere size constants for visualization
+    MIN_SPHERE_SIZE = 20
+    MAX_SPHERE_SIZE = 200
+    BASE_SPHERE_SIZE = 50
+    SIZE_SCALE_FACTOR = 20
+    
+    def __init__(self, title: str = "Gravity Simulation", output_file: str = "gravity_simulation_3d.png", 
+                 update_interval: int = 1):
+        """Initialize 3D visualizer.
+        
+        Args:
+            title: Title for the visualization window
+            output_file: Filename to save the final visualization
+            update_interval: Render every N simulation steps (default: 1)
+        """
+        if not HAS_MATPLOTLIB:
+            raise RuntimeError(
+                "matplotlib is required for 3D visualization. "
+                "Install it with: pip install matplotlib"
+            )
+        self.title = title
+        self.output_file = output_file
+        self.fig = None
+        self.ax = None
+        self.trajectories: Dict[str, List[Vec3]] = {}
+        self.colors: Dict[str, str] = {}
+        self.update_interval = update_interval
+        self.step_count = 0
+        
+    def initialize(self, objects: Dict[str, Body]) -> None:
+        """Initialize the 3D plot."""
+        self.fig = plt.figure(figsize=(10, 8))
+        self.ax = self.fig.add_subplot(111, projection='3d')
+        self.ax.set_xlabel('X (m)')
+        self.ax.set_ylabel('Y (m)')
+        self.ax.set_zlabel('Z (m)')
+        self.ax.set_title(self.title)
+        
+        # Initialize trajectory storage
+        for name, obj in objects.items():
+            self.trajectories[name] = [obj.position]
+            # Use object color if available, otherwise default colors
+            if hasattr(obj, 'color') and obj.color:
+                self.colors[name] = obj.color
+            else:
+                # Assign from default color palette
+                self.colors[name] = self.DEFAULT_COLOR_PALETTE[len(self.colors) % len(self.DEFAULT_COLOR_PALETTE)]
+    
+    def update(self, objects: Dict[str, Body]) -> None:
+        """Update trajectories with current positions."""
+        self.step_count += 1
+        for name, obj in objects.items():
+            if name not in self.trajectories:
+                self.trajectories[name] = []
+                self.colors[name] = 'gray'
+            self.trajectories[name].append(obj.position)
+    
+    def render(self, objects: Dict[str, Body], show_trajectories: bool = True, 
+               max_trail_length: int = 1000) -> None:
+        """Render the current state of the simulation."""
+        if self.ax is None:
+            self.initialize(objects)
+        
+        self.ax.clear()
+        self.ax.set_xlabel('X (m)')
+        self.ax.set_ylabel('Y (m)')
+        self.ax.set_zlabel('Z (m)')
+        self.ax.set_title(self.title)
+        
+        # Plot trajectories
+        if show_trajectories:
+            for name, trajectory in self.trajectories.items():
+                if len(trajectory) > 1:
+                    # Limit trajectory length for performance
+                    recent_traj = trajectory[-max_trail_length:]
+                    xs = [p[0] for p in recent_traj]
+                    ys = [p[1] for p in recent_traj]
+                    zs = [p[2] for p in recent_traj]
+                    self.ax.plot(xs, ys, zs, color=self.colors.get(name, 'gray'), 
+                               alpha=0.5, linewidth=1, label=f"{name} trail")
+        
+        # Plot current positions as spheres
+        for name, obj in objects.items():
+            x, y, z = obj.position
+            color = self.colors.get(name, 'gray')
+            # Size based on mass (logarithmic scale for better visibility)
+            size = max(
+                self.MIN_SPHERE_SIZE,
+                min(self.MAX_SPHERE_SIZE, 
+                    self.BASE_SPHERE_SIZE + self.SIZE_SCALE_FACTOR * math.log10(obj.mass + 1))
+            )
+            self.ax.scatter([x], [y], [z], color=color, s=size, 
+                          marker='o', edgecolors='black', linewidth=0.5, label=name)
+        
+        # Auto-scale axes to fit all objects
+        all_positions = [obj.position for obj in objects.values()]
+        if all_positions:
+            xs = [p[0] for p in all_positions]
+            ys = [p[1] for p in all_positions]
+            zs = [p[2] for p in all_positions]
+            
+            # Add some padding
+            x_range = max(xs) - min(xs) if len(xs) > 1 else 1e6
+            y_range = max(ys) - min(ys) if len(ys) > 1 else 1e6
+            z_range = max(zs) - min(zs) if len(zs) > 1 else 1e6
+            max_range = max(x_range, y_range, z_range) * 1.2
+            
+            mid_x = (max(xs) + min(xs)) / 2
+            mid_y = (max(ys) + min(ys)) / 2
+            mid_z = (max(zs) + min(zs)) / 2
+            
+            self.ax.set_xlim(mid_x - max_range/2, mid_x + max_range/2)
+            self.ax.set_ylim(mid_y - max_range/2, mid_y + max_range/2)
+            self.ax.set_zlim(mid_z - max_range/2, mid_z + max_range/2)
+        
+        self.ax.legend(loc='upper right', fontsize='small')
+        plt.draw()
+        plt.pause(0.001)
+    
+    def show(self) -> None:
+        """Display the final plot."""
+        if self.fig:
+            plt.show()
+    
+    def save(self, filename: str | None = None) -> None:
+        """Save the current plot to a file.
+        
+        Args:
+            filename: Output filename. If None, uses self.output_file.
+        """
+        if self.fig:
+            output = filename or self.output_file
+            plt.savefig(output, dpi=150, bbox_inches='tight')
+            print(f"Saved visualization to {output}")
+    
+    def create_animation(self, objects: Dict[str, Body], output_file: str = "gravity_animation.mp4",
+                        fps: int = 30, show_trajectories: bool = True) -> None:
+        """Create an animation from stored trajectories.
+        
+        Args:
+            objects: Final state of objects (for metadata)
+            output_file: Output filename (supports .mp4, .gif)
+            fps: Frames per second
+            show_trajectories: Whether to show trajectory trails
+        """
+        if not HAS_MATPLOTLIB:
+            raise RuntimeError("matplotlib is required for animation")
+        
+        try:
+            from matplotlib import animation
+        except ImportError:
+            raise RuntimeError("matplotlib.animation is required for creating animations")
+        
+        # Check if we have trajectory data
+        if not self.trajectories or all(len(t) == 0 for t in self.trajectories.values()):
+            print("⚠️  No trajectory data available for animation")
+            return
+        
+        # Find the maximum trajectory length
+        max_frames = max(len(traj) for traj in self.trajectories.values())
+        if max_frames < 2:
+            print("⚠️  Need at least 2 frames for animation")
+            return
+        
+        print(f"📹 Creating animation with {max_frames} frames...")
+        
+        # Create figure for animation
+        self.fig = plt.figure(figsize=(10, 8))
+        self.ax = self.fig.add_subplot(111, projection='3d')
+        
+        def init():
+            """Initialize animation."""
+            self.ax.clear()
+            self.ax.set_xlabel('X (m)')
+            self.ax.set_ylabel('Y (m)')
+            self.ax.set_zlabel('Z (m)')
+            self.ax.set_title(self.title)
+            return []
+        
+        def animate(frame):
+            """Animate a single frame."""
+            self.ax.clear()
+            self.ax.set_xlabel('X (m)')
+            self.ax.set_ylabel('Y (m)')
+            self.ax.set_zlabel('Z (m)')
+            self.ax.set_title(f"{self.title} - Frame {frame}/{max_frames}")
+            
+            # Collect all positions for this frame (and previous for trails)
+            all_positions_frame = []
+            
+            # Plot trajectories
+            if show_trajectories:
+                for name, trajectory in self.trajectories.items():
+                    if frame < len(trajectory):
+                        # Show trail up to current frame
+                        trail = trajectory[:frame+1]
+                        if len(trail) > 1:
+                            xs = [p[0] for p in trail]
+                            ys = [p[1] for p in trail]
+                            zs = [p[2] for p in trail]
+                            self.ax.plot(xs, ys, zs, color=self.colors.get(name, 'gray'),
+                                       alpha=0.5, linewidth=1)
+            
+            # Plot current positions
+            for name, trajectory in self.trajectories.items():
+                if frame < len(trajectory):
+                    pos = trajectory[frame]
+                    all_positions_frame.append(pos)
+                    x, y, z = pos
+                    color = self.colors.get(name, 'gray')
+                    
+                    # Get object mass from objects dict if available
+                    mass = objects[name].mass if name in objects else 1e30
+                    size = max(
+                        self.MIN_SPHERE_SIZE,
+                        min(self.MAX_SPHERE_SIZE,
+                            self.BASE_SPHERE_SIZE + self.SIZE_SCALE_FACTOR * math.log10(mass + 1))
+                    )
+                    self.ax.scatter([x], [y], [z], color=color, s=size,
+                                  marker='o', edgecolors='black', linewidth=0.5, label=name)
+            
+            # Auto-scale axes
+            if all_positions_frame:
+                xs = [p[0] for p in all_positions_frame]
+                ys = [p[1] for p in all_positions_frame]
+                zs = [p[2] for p in all_positions_frame]
+                
+                # Get all trajectory points for consistent scaling
+                all_traj_points = []
+                for trajectory in self.trajectories.values():
+                    all_traj_points.extend(trajectory[:frame+1])
+                
+                if all_traj_points:
+                    all_xs = [p[0] for p in all_traj_points]
+                    all_ys = [p[1] for p in all_traj_points]
+                    all_zs = [p[2] for p in all_traj_points]
+                    
+                    x_range = max(all_xs) - min(all_xs) if len(all_xs) > 1 else 1e6
+                    y_range = max(all_ys) - min(all_ys) if len(all_ys) > 1 else 1e6
+                    z_range = max(all_zs) - min(all_zs) if len(all_zs) > 1 else 1e6
+                    max_range = max(x_range, y_range, z_range) * 1.2
+                    
+                    mid_x = (max(all_xs) + min(all_xs)) / 2
+                    mid_y = (max(all_ys) + min(all_ys)) / 2
+                    mid_z = (max(all_zs) + min(all_zs)) / 2
+                    
+                    self.ax.set_xlim(mid_x - max_range/2, mid_x + max_range/2)
+                    self.ax.set_ylim(mid_y - max_range/2, mid_y + max_range/2)
+                    self.ax.set_zlim(mid_z - max_range/2, mid_z + max_range/2)
+            
+            self.ax.legend(loc='upper right', fontsize='small')
+            return []
+        
+        # Create animation
+        anim = animation.FuncAnimation(
+            self.fig, animate, init_func=init,
+            frames=max_frames, interval=1000/fps, blit=False
+        )
+        
+        # Save animation
+        try:
+            if output_file.endswith('.gif'):
+                print("💾 Saving as GIF (this may take a while)...")
+                anim.save(output_file, writer='pillow', fps=fps)
+            elif output_file.endswith('.mp4'):
+                print("💾 Saving as MP4...")
+                try:
+                    anim.save(output_file, writer='ffmpeg', fps=fps, extra_args=['-vcodec', 'libx264'])
+                except Exception as e:
+                    print(f"⚠️  FFmpeg not available, falling back to pillow writer")
+                    # Try with pillow as fallback
+                    gif_file = output_file.replace('.mp4', '.gif')
+                    anim.save(gif_file, writer='pillow', fps=fps)
+                    print(f"✅ Saved as GIF instead: {gif_file}")
+                    return
+            else:
+                print(f"⚠️  Unsupported format, saving as GIF")
+                gif_file = output_file.replace(Path(output_file).suffix, '.gif')
+                anim.save(gif_file, writer='pillow', fps=fps)
+                output_file = gif_file
+            
+            print(f"✅ Animation saved: {output_file}")
+        except Exception as e:
+            print(f"❌ Failed to save animation: {e}")
+            print("💡 Tip: Install ffmpeg for MP4 or pillow for GIF support")
+            print("   pip install pillow")
+
 
 
 class GravityLaw(Protocol):
@@ -726,7 +1086,8 @@ class NumPyPhysicsBackend:
 
 
 class GravityInterpreter:
-    def __init__(self, physics_backend: PhysicsBackend | None = None) -> None:
+    def __init__(self, physics_backend: PhysicsBackend | None = None, enable_3d_viz: bool = False, 
+                 viz_interval: int = 1) -> None:
         self.objects: Dict[str, Body] = {}
         self.pull_pairs: set[Tuple[str, str]] = set()  # Using set for O(1) membership checks
         self.output: List[str] = []
@@ -734,6 +1095,11 @@ class GravityInterpreter:
         self.global_friction = 0.0
         self.enable_collisions = True
         self.physics_backend = physics_backend or PythonPhysicsBackend()
+        self.visualizer: Visualizer3D | None = None
+        self.enable_3d_viz = enable_3d_viz
+        if enable_3d_viz:
+            self.visualizer = Visualizer3D("Gravity-Lang 3D Simulation", 
+                                          update_interval=viz_interval)
 
     def _format_float(self, value: float) -> str:
         return f"{value:.6e}"
@@ -742,12 +1108,19 @@ class GravityInterpreter:
         token = token.strip()
         m = re.fullmatch(r"([-+]?\d+(?:\.\d+)?(?:e[-+]?\d+)?)(?:\[([a-zA-Z]+)\])?", token)
         if not m:
-            raise ValueError(f"Invalid numeric token: {token}")
+            raise ParseError(
+                f"Invalid numeric value: '{token}'",
+                "Use format: number[unit] (e.g., '100[km]', '5.5[s]', '1e6[kg]')"
+            )
         value = float(m.group(1))
         unit = m.group(2)
         if unit:
             if unit not in UNIT_SCALE:
-                raise ValueError(f"Unsupported unit: {unit}")
+                available_units = ", ".join(UNIT_SCALE.keys())
+                raise UnitError(
+                    f"Unknown unit: '{unit}'",
+                    f"Available units: {available_units}"
+                )
             value *= UNIT_SCALE[unit]
         return value
 
@@ -755,20 +1128,33 @@ class GravityInterpreter:
         token = token.strip()
         m = re.fullmatch(r"(\[[^\]]+\])(?:\[([a-zA-Z/]+)\])?", token)
         if not m:
-            raise ValueError(f"Invalid vector token: {token}")
+            raise ParseError(
+                f"Invalid vector: '{token}'",
+                "Use format: [x,y,z] or [x,y,z][unit] (e.g., '[1,2,3]', '[0,1,0][km/s]')"
+            )
 
         vector_text = m.group(1)
         unit = m.group(2)
         inner = vector_text[1:-1]
         parts = [part.strip() for part in inner.split(",")]
         if len(parts) != 3:
-            raise ValueError(f"Vector must have 3 components: {token}")
+            raise ParseError(
+                f"Vector must have exactly 3 components, got {len(parts)}: '{token}'",
+                "Use format: [x,y,z] with three comma-separated values"
+            )
 
         if unit:
             if unit not in VECTOR_UNIT_SCALE:
-                raise ValueError(f"Unsupported vector unit: {unit}")
+                available_units = ", ".join(VECTOR_UNIT_SCALE.keys())
+                raise UnitError(
+                    f"Unknown vector unit: '{unit}'",
+                    f"Available vector units: {available_units}"
+                )
             if any("[" in part for part in parts):
-                raise ValueError("Vector components must be unitless when using vector suffix units")
+                raise ParseError(
+                    "Cannot use units on individual components and vector suffix",
+                    "Use either [1[km],2[km],3[km]] OR [1,2,3][km]"
+                )
             scale = VECTOR_UNIT_SCALE[unit]
             return (float(parts[0]) * scale, float(parts[1]) * scale, float(parts[2]) * scale)
 
@@ -815,7 +1201,17 @@ class GravityInterpreter:
 
     def _require_object(self, obj_name: str, context: str) -> Body:
         if obj_name not in self.objects:
-            raise ValueError(f"Unknown object '{obj_name}' referenced in {context}")
+            available = list(self.objects.keys())
+            if available:
+                suggestion = f"Available objects: {', '.join(available[:5])}"
+                if len(available) > 5:
+                    suggestion += f" (and {len(available) - 5} more)"
+            else:
+                suggestion = "No objects have been created yet. Create objects first with 'sphere', 'cube', etc."
+            raise ObjectError(
+                f"Object '{obj_name}' does not exist (referenced in {context})",
+                suggestion
+            )
         return self.objects[obj_name]
 
     def execute(self, source: str) -> List[str]:
@@ -847,10 +1243,13 @@ class GravityInterpreter:
                 i += 1
             elif " pull " in line:
                 a, _, b = line.partition(" pull ")
-                source_name, target_name = a.strip(), b.strip()
+                source_name = a.strip()
+                # Split by comma and strip whitespace to support multiple objects
+                target_names = [t.strip() for t in b.split(",")]
                 self._require_object(source_name, "pull statement")
-                self._require_object(target_name, "pull statement")
-                self.pull_pairs.add((source_name, target_name))
+                for target_name in target_names:
+                    self._require_object(target_name, "pull statement")
+                    self.pull_pairs.add((source_name, target_name))
                 i += 1
             elif line.startswith(("orbit ", "simulate ")):
                 i = self._run_loop(lines, i)
@@ -867,7 +1266,10 @@ class GravityInterpreter:
                 self._exec_orbital_elements(line)
                 i += 1
             else:
-                raise ValueError(f"Unsupported statement: {line}")
+                raise ParseError(
+                    f"Unknown statement: '{line}'",
+                    "Valid statements: sphere/cube/pointmass/probe, pull, grav all, friction, collisions, thrust, simulate, orbit, print, monitor energy, observe, orbital_elements"
+                )
         return self.output
 
     def _parse_object(self, line: str) -> None:
@@ -875,14 +1277,17 @@ class GravityInterpreter:
             shape, rest = line.split(" ", 1)
             name, rest = rest.split(" at ", 1)
         except ValueError as exc:
-            raise ValueError(f"Invalid object declaration syntax: {line}") from exc
+            raise ParseError(
+                f"Invalid object syntax: '{line}'",
+                "Use format: sphere ObjectName at [x,y,z] mass value[unit] ...",
+                line_number=None
+            ) from exc
 
         # Check for duplicate object names
         if name.strip() in self.objects:
-            raise ValueError(
-                f"Error: Object '{name.strip()}' already exists.\n"
-                f"  Each object must have a unique name.\n"
-                f"  Line: {line}"
+            raise ObjectError(
+                f"Object '{name.strip()}' already exists",
+                f"Each object must have a unique name. Choose a different name or remove the existing '{name.strip()}' object."
             )
 
         try:
@@ -898,15 +1303,17 @@ class GravityInterpreter:
 
         m_mass = re.search(r"mass\s+([^\s]+)", trailing)
         if not m_mass:
-            raise ValueError(f"Object declaration missing mass: {line}")
+            raise ParseError(
+                f"Object declaration missing mass: '{line}'",
+                "Add 'mass value[unit]' (e.g., 'mass 5.972e24[kg]')"
+            )
         mass = self.parse_value(m_mass.group(1))
         
         # Validate positive mass
         if mass <= 0:
-            raise ValueError(
-                f"Error: Mass must be positive, got {mass}\n"
-                f"  Physical objects cannot have zero or negative mass.\n"
-                f"  Line: {line}"
+            raise ValidationError(
+                f"Mass must be positive, got {mass}",
+                "Physical objects cannot have zero or negative mass. Use a positive value like '1[kg]' or '1e30[kg]'"
             )
 
         radius = 1.0
@@ -918,9 +1325,9 @@ class GravityInterpreter:
             radius = self.parse_value(m_radius.group(1))
             # Validate positive radius
             if radius <= 0:
-                raise ValueError(
-                    f"Error: Radius must be positive, got {radius}\n"
-                    f"  Line: {line}"
+                raise ValidationError(
+                    f"Radius must be positive, got {radius}",
+                    "Use a positive value like '6371[km]' for Earth-sized objects"
                 )
 
         if "velocity" in trailing:
@@ -931,6 +1338,15 @@ class GravityInterpreter:
                 velocity_vector = f"{velocity_vector}{vel_unit}"
             velocity = self.parse_vector(velocity_vector)
 
+        # Parse optional color attribute
+        # Note: Color validation is deferred to matplotlib when rendering.
+        # Accepts matplotlib color names ('blue', 'red', etc.) or hex codes ('#0000FF').
+        # Invalid colors will cause matplotlib to raise an error during visualization.
+        color = ""
+        m_color = re.search(r'color\s+"([^"]+)"', trailing)
+        if m_color:
+            color = m_color.group(1)
+
         self.objects[name.strip()] = Body(
             name=name.strip(),
             shape=shape,
@@ -939,6 +1355,7 @@ class GravityInterpreter:
             radius=radius,
             mass=mass,
             fixed=fixed,
+            color=color,
         )
 
     def _parse_velocity_assignment(self, line: str) -> None:
@@ -1080,20 +1497,24 @@ class GravityInterpreter:
 
     def _run_loop(self, lines: List[str], start: int) -> int:
         header = lines[start]
+        # Updated regex to support optional units on range values: 0..100[days]
         m_orbit = re.fullmatch(
-            r"orbit\s+\w+\s+in\s+(\d+)\.\.(\d+)\s+dt\s+([^\s]+)(?:\s+integrator\s+(leapfrog|rk4|verlet|euler))?\s*\{",
+            r"orbit\s+\w+\s+in\s+(\d+(?:\[[^\]]+\])?)\.\.(\d+(?:\[[^\]]+\])?)\s+dt\s+([^\s]+)(?:\s+integrator\s+(leapfrog|rk4|verlet|euler))?\s*\{",
             header,
         )
         m_sim = re.fullmatch(
-            r"simulate\s+\w+\s+in\s+(\d+)\.\.(\d+)\s+step\s+([^\s]+)(?:\s+integrator\s+(leapfrog|rk4|verlet|euler))?\s*\{",
+            r"simulate\s+\w+\s+in\s+(\d+(?:\[[^\]]+\])?)\.\.(\d+(?:\[[^\]]+\])?)\s+step\s+([^\s]+)(?:\s+integrator\s+(leapfrog|rk4|verlet|euler))?\s*\{",
             header,
         )
         match = m_orbit or m_sim
         if not match:
             raise ValueError(f"Invalid loop statement: {header}")
 
-        begin = int(match.group(1))
-        end = int(match.group(2))
+        # Parse range values which may include units
+        begin_str = match.group(1)
+        end_str = match.group(2)
+        begin = int(self.parse_value(begin_str))
+        end = int(self.parse_value(end_str))
         dt = self.parse_value(match.group(3))
         integrator: Integrator = (match.group(4) or "leapfrog").lower()  # type: ignore[assignment]
 
@@ -1129,13 +1550,16 @@ class GravityInterpreter:
                     continue
                 if " pull " in stmt:
                     a, _, b = stmt.partition(" pull ")
-                    source_name, target_name = a.strip(), b.strip()
+                    source_name = a.strip()
+                    # Split by comma and strip whitespace to support multiple objects
+                    target_names = [t.strip() for t in b.split(",")]
                     self._require_object(source_name, "pull statement")
-                    self._require_object(target_name, "pull statement")
-                    pair = (source_name, target_name)
-                    self.pull_pairs.add(pair)
-                    if pair not in step_pairs:
-                        step_pairs.append(pair)
+                    for target_name in target_names:
+                        self._require_object(target_name, "pull statement")
+                        pair = (source_name, target_name)
+                        self.pull_pairs.add(pair)
+                        if pair not in step_pairs:
+                            step_pairs.append(pair)
 
             # Execute physics step
             if not has_explicit_step:
@@ -1162,7 +1586,23 @@ class GravityInterpreter:
                     continue
 
             self._run_observers(step_index)
+            
+            # Update 3D visualization if enabled
+            if self.visualizer:
+                if step_index == 0:
+                    self.visualizer.initialize(self.objects)
+                self.visualizer.update(self.objects)
+                # Render every N steps to avoid slowdown
+                if step_index % self.visualizer.update_interval == 0:
+                    self.visualizer.render(self.objects)
+            
             step_index += 1
+        
+        # Show final visualization if enabled
+        if self.visualizer:
+            self.visualizer.render(self.objects)
+            self.visualizer.save()  # Uses self.output_file from constructor
+        
         return i + 1
 
     def _collect_inline_observers(self, block: List[str]) -> None:
@@ -1246,10 +1686,27 @@ class GravityInterpreter:
         raise ValueError(f"Unsupported print expression: {expr}")
 
 
-def run_script_file(script_path: str) -> List[str]:
+def run_script_file(script_path: str, enable_3d: bool = False, viz_interval: int = 1, 
+                    create_animation: bool = False, anim_fps: int = 30) -> List[str]:
     script = Path(script_path).read_text(encoding="utf-8")
-    interpreter = GravityInterpreter()
-    return interpreter.execute(script)
+    interpreter = GravityInterpreter(enable_3d_viz=enable_3d, viz_interval=viz_interval)
+    output = interpreter.execute(script)
+    
+    if enable_3d and interpreter.visualizer:
+        # Create animation if requested
+        if create_animation:
+            anim_filename = "gravity_animation.gif"
+            print(f"\n🎬 Creating animation...")
+            interpreter.visualizer.create_animation(
+                interpreter.objects, 
+                output_file=anim_filename,
+                fps=anim_fps
+            )
+        
+        # Show final visualization
+        interpreter.visualizer.show()  # Keep window open at end
+    
+    return output
 
 
 def check_script_file(script_path: str) -> None:
@@ -1291,6 +1748,14 @@ def main() -> int:
 
     run_parser = sub.add_parser("run", help="Run a .gravity script")
     run_parser.add_argument("run_file", help="Path to a .gravity script")
+    run_parser.add_argument("--3d", dest="enable_3d", action="store_true", 
+                           help="Enable 3D visualization (requires matplotlib)")
+    run_parser.add_argument("--viz-interval", type=int, default=1, 
+                           help="Visualization update interval (render every N steps)")
+    run_parser.add_argument("--animate", dest="create_animation", action="store_true",
+                           help="Create animation from simulation (requires --3d)")
+    run_parser.add_argument("--fps", type=int, default=30,
+                           help="Animation frames per second (default: 30)")
 
     check_parser = sub.add_parser("check", help="Parse and validate a .gravity script")
     check_parser.add_argument("check_file", help="Path to a .gravity script")
@@ -1314,7 +1779,18 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.command == "run":
-        output = run_script_file(args.run_file)
+        # Validate animation requires 3D
+        if hasattr(args, 'create_animation') and args.create_animation and not args.enable_3d:
+            print("⚠️  Warning: --animate requires --3d flag. Enabling 3D visualization.")
+            args.enable_3d = True
+        
+        output = run_script_file(
+            args.run_file, 
+            enable_3d=args.enable_3d,
+            viz_interval=args.viz_interval,
+            create_animation=getattr(args, 'create_animation', False),
+            anim_fps=getattr(args, 'fps', 30)
+        )
         print("\n".join(output))
         return 0
 
