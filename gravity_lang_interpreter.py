@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import ctypes
+import os
 import json
 import math
 import re
@@ -25,6 +26,9 @@ except ImportError:
 
 # Optional matplotlib support for 3D visualization
 try:
+    import matplotlib
+    if not os.environ.get("DISPLAY") and not sys.platform.startswith("win"):
+        matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     from mpl_toolkits.mplot3d import Axes3D
     HAS_MATPLOTLIB = True
@@ -2154,7 +2158,8 @@ def create_physics_backend(name: BackendName, julia_bin: str = "julia") -> Physi
 
 def run_script_file(script_path: str, enable_3d: bool = False, viz_interval: int = 1, 
                     create_animation: bool = False, anim_fps: int = 30,
-                    backend_name: BackendName = "auto", julia_bin: str = "julia") -> List[str]:
+                    backend_name: BackendName = "auto", julia_bin: str = "julia",
+                    show_visualization: bool = True) -> List[str]:
     script = Path(script_path).read_text(encoding="utf-8")
     interpreter = GravityInterpreter(
         physics_backend=create_physics_backend(backend_name, julia_bin=julia_bin),
@@ -2174,8 +2179,9 @@ def run_script_file(script_path: str, enable_3d: bool = False, viz_interval: int
                 fps=anim_fps
             )
         
-        # Show final visualization
-        interpreter.visualizer.show()  # Keep window open at end
+        # Show final visualization (skip in headless/non-interactive mode)
+        if show_visualization:
+            interpreter.visualizer.show()  # Keep window open at end
     
     return output
 
@@ -2197,6 +2203,14 @@ def build_executable(name: str, outdir: str, auto_install: bool = False, clean: 
     cmd = [
         pyinstaller,
         "--onefile",
+        "--hidden-import",
+        "matplotlib",
+        "--hidden-import",
+        "PIL",
+        "--collect-data",
+        "matplotlib",
+        "--collect-data",
+        "PIL",
         "--name",
         name,
         "--distpath",
@@ -2294,6 +2308,8 @@ def main() -> int:
                            help="Physics backend: auto (default prefers cpp), python, numpy, cpp, or julia_diffeq")
     run_parser.add_argument("--julia-bin", default="julia",
                            help="Julia binary path when using --backend julia_diffeq")
+    run_parser.add_argument("--headless", action="store_true",
+                           help="Run visualization/animation generation without opening window")
 
     check_parser = sub.add_parser("check", help="Parse and validate a .gravity script")
     check_parser.add_argument("check_file", help="Path to a .gravity script")
@@ -2346,6 +2362,7 @@ def main() -> int:
             anim_fps=getattr(args, 'fps', 30),
             backend_name=getattr(args, 'backend', 'python'),
             julia_bin=getattr(args, 'julia_bin', 'julia'),
+            show_visualization=not getattr(args, 'headless', False),
         )
         print("\n".join(output))
         return 0

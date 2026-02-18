@@ -28,7 +28,7 @@ jobs:
       - name: Install test dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install numpy pytest
+          pip install numpy pytest matplotlib pillow
 
       - name: Run tests
         run: python -m pytest -q
@@ -37,6 +37,7 @@ jobs:
         run: |
           python gravity_lang_interpreter.py backends
           python gravity_lang_interpreter.py benchmark --objects 40 --steps 3 --repeats 2 --warmup 1 --backends python,numpy
+          python gravity_lang_interpreter.py run examples/moon_orbit.gravity --backend auto --3d --animate --fps 8 --headless
 
   build:
     name: Build executable (${{ matrix.os }})
@@ -68,10 +69,17 @@ jobs:
       - name: Install build dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pyinstaller numpy matplotlib
+          pip install pyinstaller numpy matplotlib pillow
 
       - name: Build executable
         run: python gravity_lang_interpreter.py build-exe --name ${{ matrix.exe_name }} --outdir dist
+
+      - name: Generate visualization artifacts (Python, headless)
+        run: |
+          python gravity_lang_interpreter.py run examples/moon_orbit.gravity --backend auto --3d --animate --fps 12 --headless
+          mkdir -p dist/visuals
+          cp -f gravity_simulation_3d.png dist/visuals/ || true
+          cp -f gravity_animation.gif dist/visuals/ || true
 
       - name: Smoke test executable (Windows)
         if: runner.os == 'Windows'

@@ -131,6 +131,8 @@ python gravity_lang_interpreter.py benchmark --objects 200 --steps 20 --dt 1
 
 ### 🎨 3D Visualization (NEW!)
 
+Build executable now bundles matplotlib/Pillow resources for visualization + animation export.
+
 Enable real-time 3D visualization with matplotlib:
 
 ```bash
@@ -157,6 +159,8 @@ Create stunning animations from your simulations:
 ```bash
 # Create animated GIF
 python gravity_lang_interpreter.py run examples/galaxy_collision.gravity --3d --animate
+# CI/headless export (no GUI window)
+python gravity_lang_interpreter.py run examples/moon_orbit.gravity --3d --animate --headless
 
 # Adjust frame rate (default: 30 fps)
 python gravity_lang_interpreter.py run examples/moon_orbit.gravity --3d --animate --fps 60
@@ -515,6 +519,9 @@ python gravity_lang_interpreter.py benchmark --objects 200 --steps 20 --repeats 
 
 # Show version
 python gravity_lang_interpreter.py --version
+
+# Headless animation export (great for CI/social media content)
+python gravity_lang_interpreter.py run examples/moon_orbit.gravity --3d --animate --headless
 
 # Build standalone executable
 python gravity_lang_interpreter.py build-exe --name gravity-lang --outdir dist

@@ -224,6 +224,18 @@ class InterpreterTests(unittest.TestCase):
             build_executable("gravity-test", "dist", auto_install=True)
             self.assertEqual(run_mock.call_count, 2)
 
+
+    def test_build_executable_includes_visualization_assets(self):
+        with (
+            patch("gravity_lang_interpreter.shutil.which", return_value="/usr/bin/pyinstaller"),
+            patch("gravity_lang_interpreter.subprocess.run") as run_mock,
+        ):
+            build_executable("gravity-test", "dist")
+            cmd = run_mock.call_args[0][0]
+            self.assertIn("--hidden-import", cmd)
+            self.assertIn("matplotlib", cmd)
+            self.assertIn("PIL", cmd)
+            self.assertIn("--collect-data", cmd)
     def test_verlet_integrator(self):
         """Test the Verlet integrator."""
         src = """
@@ -311,6 +323,21 @@ class InterpreterTests(unittest.TestCase):
         # Check for reasonable eccentricity (should be close to circular)
         ecc_line = [line for line in output if "Eccentricity:" in line][0]
         self.assertIn("Eccentricity:", ecc_line)
+
+
+    def test_cli_run_headless_flag(self):
+        with tempfile.NamedTemporaryFile("w", suffix=".gravity", delete=False) as tmp:
+            tmp.write("sphere Earth at [0,0,0] mass 5.972e24[kg]\n")
+            path = tmp.name
+        try:
+            with (
+                patch("gravity_lang_interpreter.run_script_file", return_value=[]),
+                patch("sys.argv", ["gravity_lang_interpreter.py", "run", path, "--headless"]),
+            ):
+                code = main()
+            self.assertEqual(code, 0)
+        finally:
+            os.remove(path)
 
     def test_cli_check_command(self):
         with tempfile.NamedTemporaryFile("w", suffix=".gravity", delete=False) as tmp:
