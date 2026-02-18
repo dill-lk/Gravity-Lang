@@ -1,0 +1,24 @@
+# Comprehensive demonstration of Gravity-Lang enhanced features
+# This script showcases multiple integrators and orbital analysis
+
+# Setup: Three-body system (simplified)
+sphere Sun at [0,0,0] mass 1.989e30[kg] fixed
+sphere Earth at [149600000,0,0][km] mass 5.972e24[kg] velocity [0,29.78,0][km/s]
+sphere Mars at [227900000,0,0][km] mass 6.4171e23[kg] velocity [0,24.07,0][km/s]
+
+# Calculate initial orbital elements for both planets
+orbital_elements Earth around Sun
+orbital_elements Mars around Sun
+
+# Simulate using Verlet integrator (best for long-term stability)
+simulate t in 0..30 step 86400[s] integrator verlet {
+    Sun pull Earth
+    Sun pull Mars
+}
+
+# Calculate final orbital elements to check stability
+orbital_elements Earth around Sun
+orbital_elements Mars around Sun
+
+# The eccentricity should remain nearly constant, demonstrating
+# the excellent energy conservation of the Verlet integrator
