@@ -30,6 +30,7 @@ simulate t in 0..28 step 3600[s] integrator verlet {
 - **🔬 Scientific** - 4 integrators (Leapfrog, RK4, Verlet, Euler), orbital elements
 - **🎨 Flexible** - Custom gravity laws (Newtonian, MOND, GR corrections)
 - **📊 Data Export** - CSV streaming for analysis
+- **🌌 3D Visualization** - Real-time matplotlib visualization with trajectory tracking
 - **🆓 Free** - MIT licensed, no expensive tools needed
 
 ---
@@ -78,8 +79,30 @@ python gravity_lang_interpreter.py build-exe --name gravity-lang --outdir dist
 ### Install as Python Package (Optional)
 
 ```bash
-pip install numpy  # For high-performance backend
+pip install numpy       # For high-performance backend
+pip install matplotlib  # For 3D visualization
 ```
+
+### 🎨 3D Visualization (NEW!)
+
+Enable real-time 3D visualization with matplotlib:
+
+```bash
+# Install matplotlib
+pip install matplotlib
+
+# Run with 3D visualization
+python gravity_lang_interpreter.py run examples/solar_system.gravity --3d
+
+# Control visualization update frequency (render every N steps)
+python gravity_lang_interpreter.py run examples/solar_system.gravity --3d --viz-interval 10
+```
+
+**Features:**
+- Real-time 3D trajectory visualization
+- Color-coded objects (specify with `color "blue"` in object declaration)
+- Automatic scaling and camera positioning
+- Saves final visualization to `gravity_simulation_3d.png`
 
 ---
 
@@ -93,6 +116,9 @@ sphere Earth at [0,0,0] radius 6371[km] mass 5.972e24[kg] fixed
 
 # With initial velocity
 sphere Moon at [384400,0,0][km] mass 7.348e22[kg] velocity [0,1.022,0][km/s]
+
+# With color for visualization
+sphere Sun at [0,0,0] mass 1.989e30[kg] color "yellow"
 
 # Other shapes
 cube Box at [100,0,0][km] radius 10[km] mass 1000[kg]
@@ -113,8 +139,11 @@ thrust Satellite by [0,0.5,0][km/s]
 ### 3. Gravity Interactions
 
 ```gravity
-# Explicit pull
+# Single pull
 Earth pull Moon
+
+# Multiple pulls (NEW! comma-separated)
+Core pull Star1, Star2, Star3
 
 # Mutual gravity for all objects
 grav all
@@ -128,17 +157,21 @@ simulate t in 0..100 step 60[s] {
 ### 4. Simulation Loops
 
 ```gravity
-# Simulate loop with timestep
-simulate t in 0..365 step 86400[s] integrator verlet {
+# Basic loop
+simulate t in 0..100 step 60[s] {
     Earth pull Moon
     print Moon.position
 }
 
-# Orbit loop (alias for simulate)
-orbit t in 0..100 dt 60[s] integrator rk4 {
-    grav all
+# With units on range (NEW!)
+simulate t in 0..365[days] step 1[days] integrator verlet {
+    Earth pull Moon
 }
-```
+
+# Orbit loop (alternative syntax)
+orbit t in 0..24 dt 3600[s] integrator rk4 {
+    Earth pull Moon
+}
 
 ### 5. Integrators
 
