@@ -33,6 +33,8 @@ simulate t in 0..28 step 3600[s] integrator verlet {
 - **🎨 Flexible** - Custom gravity laws (Newtonian, MOND, GR corrections)
 - **📊 Data Export** - CSV streaming for analysis
 - **🌌 3D Visualization** - Real-time matplotlib visualization with trajectory tracking
+- **🎬 Animation Export** - Create stunning GIF/MP4 animations from simulations
+- **🛡️ Professional Error Messages** - Helpful suggestions for common mistakes
 - **🆓 Free** - MIT licensed, no expensive tools needed
 
 ---
@@ -113,8 +115,8 @@ pip install matplotlib  # For 3D visualization
 Enable real-time 3D visualization with matplotlib:
 
 ```bash
-# Install matplotlib
-pip install matplotlib
+# Install matplotlib and pillow
+pip install matplotlib pillow
 
 # Run with 3D visualization
 python gravity_lang_interpreter.py run examples/solar_system.gravity --3d
@@ -128,6 +130,35 @@ python gravity_lang_interpreter.py run examples/solar_system.gravity --3d --viz-
 - Color-coded objects (specify with `color "blue"` in object declaration)
 - Automatic scaling and camera positioning
 - Saves final visualization to `gravity_simulation_3d.png`
+
+### 🎬 Animation Export (NEW!)
+
+Create stunning animations from your simulations:
+
+```bash
+# Create animated GIF
+python gravity_lang_interpreter.py run examples/galaxy_collision.gravity --3d --animate
+
+# Adjust frame rate (default: 30 fps)
+python gravity_lang_interpreter.py run examples/moon_orbit.gravity --3d --animate --fps 60
+```
+
+**Animation Features:**
+- Automatic GIF generation (requires pillow)
+- MP4 support (requires ffmpeg)
+- Customizable frame rate
+- Shows trajectory trails
+- Perfect for sharing on social media! 🚀
+
+**Installation:**
+```bash
+# For GIF support
+pip install pillow
+
+# For MP4 support (optional)
+# Linux/Mac: sudo apt-get install ffmpeg  OR  brew install ffmpeg
+# Windows: Download from https://ffmpeg.org/
+```
 
 ---
 

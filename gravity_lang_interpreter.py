@@ -455,6 +455,159 @@ class Visualizer3D:
             output = filename or self.output_file
             plt.savefig(output, dpi=150, bbox_inches='tight')
             print(f"Saved visualization to {output}")
+    
+    def create_animation(self, objects: Dict[str, Body], output_file: str = "gravity_animation.mp4",
+                        fps: int = 30, show_trajectories: bool = True) -> None:
+        """Create an animation from stored trajectories.
+        
+        Args:
+            objects: Final state of objects (for metadata)
+            output_file: Output filename (supports .mp4, .gif)
+            fps: Frames per second
+            show_trajectories: Whether to show trajectory trails
+        """
+        if not HAS_MATPLOTLIB:
+            raise RuntimeError("matplotlib is required for animation")
+        
+        try:
+            from matplotlib import animation
+        except ImportError:
+            raise RuntimeError("matplotlib.animation is required for creating animations")
+        
+        # Check if we have trajectory data
+        if not self.trajectories or all(len(t) == 0 for t in self.trajectories.values()):
+            print("⚠️  No trajectory data available for animation")
+            return
+        
+        # Find the maximum trajectory length
+        max_frames = max(len(traj) for traj in self.trajectories.values())
+        if max_frames < 2:
+            print("⚠️  Need at least 2 frames for animation")
+            return
+        
+        print(f"📹 Creating animation with {max_frames} frames...")
+        
+        # Create figure for animation
+        self.fig = plt.figure(figsize=(10, 8))
+        self.ax = self.fig.add_subplot(111, projection='3d')
+        
+        def init():
+            """Initialize animation."""
+            self.ax.clear()
+            self.ax.set_xlabel('X (m)')
+            self.ax.set_ylabel('Y (m)')
+            self.ax.set_zlabel('Z (m)')
+            self.ax.set_title(self.title)
+            return []
+        
+        def animate(frame):
+            """Animate a single frame."""
+            self.ax.clear()
+            self.ax.set_xlabel('X (m)')
+            self.ax.set_ylabel('Y (m)')
+            self.ax.set_zlabel('Z (m)')
+            self.ax.set_title(f"{self.title} - Frame {frame}/{max_frames}")
+            
+            # Collect all positions for this frame (and previous for trails)
+            all_positions_frame = []
+            
+            # Plot trajectories
+            if show_trajectories:
+                for name, trajectory in self.trajectories.items():
+                    if frame < len(trajectory):
+                        # Show trail up to current frame
+                        trail = trajectory[:frame+1]
+                        if len(trail) > 1:
+                            xs = [p[0] for p in trail]
+                            ys = [p[1] for p in trail]
+                            zs = [p[2] for p in trail]
+                            self.ax.plot(xs, ys, zs, color=self.colors.get(name, 'gray'),
+                                       alpha=0.5, linewidth=1)
+            
+            # Plot current positions
+            for name, trajectory in self.trajectories.items():
+                if frame < len(trajectory):
+                    pos = trajectory[frame]
+                    all_positions_frame.append(pos)
+                    x, y, z = pos
+                    color = self.colors.get(name, 'gray')
+                    
+                    # Get object mass from objects dict if available
+                    mass = objects[name].mass if name in objects else 1e30
+                    size = max(
+                        self.MIN_SPHERE_SIZE,
+                        min(self.MAX_SPHERE_SIZE,
+                            self.BASE_SPHERE_SIZE + self.SIZE_SCALE_FACTOR * math.log10(mass + 1))
+                    )
+                    self.ax.scatter([x], [y], [z], color=color, s=size,
+                                  marker='o', edgecolors='black', linewidth=0.5, label=name)
+            
+            # Auto-scale axes
+            if all_positions_frame:
+                xs = [p[0] for p in all_positions_frame]
+                ys = [p[1] for p in all_positions_frame]
+                zs = [p[2] for p in all_positions_frame]
+                
+                # Get all trajectory points for consistent scaling
+                all_traj_points = []
+                for trajectory in self.trajectories.values():
+                    all_traj_points.extend(trajectory[:frame+1])
+                
+                if all_traj_points:
+                    all_xs = [p[0] for p in all_traj_points]
+                    all_ys = [p[1] for p in all_traj_points]
+                    all_zs = [p[2] for p in all_traj_points]
+                    
+                    x_range = max(all_xs) - min(all_xs) if len(all_xs) > 1 else 1e6
+                    y_range = max(all_ys) - min(all_ys) if len(all_ys) > 1 else 1e6
+                    z_range = max(all_zs) - min(all_zs) if len(all_zs) > 1 else 1e6
+                    max_range = max(x_range, y_range, z_range) * 1.2
+                    
+                    mid_x = (max(all_xs) + min(all_xs)) / 2
+                    mid_y = (max(all_ys) + min(all_ys)) / 2
+                    mid_z = (max(all_zs) + min(all_zs)) / 2
+                    
+                    self.ax.set_xlim(mid_x - max_range/2, mid_x + max_range/2)
+                    self.ax.set_ylim(mid_y - max_range/2, mid_y + max_range/2)
+                    self.ax.set_zlim(mid_z - max_range/2, mid_z + max_range/2)
+            
+            self.ax.legend(loc='upper right', fontsize='small')
+            return []
+        
+        # Create animation
+        anim = animation.FuncAnimation(
+            self.fig, animate, init_func=init,
+            frames=max_frames, interval=1000/fps, blit=False
+        )
+        
+        # Save animation
+        try:
+            if output_file.endswith('.gif'):
+                print("💾 Saving as GIF (this may take a while)...")
+                anim.save(output_file, writer='pillow', fps=fps)
+            elif output_file.endswith('.mp4'):
+                print("💾 Saving as MP4...")
+                try:
+                    anim.save(output_file, writer='ffmpeg', fps=fps, extra_args=['-vcodec', 'libx264'])
+                except Exception as e:
+                    print(f"⚠️  FFmpeg not available, falling back to pillow writer")
+                    # Try with pillow as fallback
+                    gif_file = output_file.replace('.mp4', '.gif')
+                    anim.save(gif_file, writer='pillow', fps=fps)
+                    print(f"✅ Saved as GIF instead: {gif_file}")
+                    return
+            else:
+                print(f"⚠️  Unsupported format, saving as GIF")
+                gif_file = output_file.replace(Path(output_file).suffix, '.gif')
+                anim.save(gif_file, writer='pillow', fps=fps)
+                output_file = gif_file
+            
+            print(f"✅ Animation saved: {output_file}")
+        except Exception as e:
+            print(f"❌ Failed to save animation: {e}")
+            print("💡 Tip: Install ffmpeg for MP4 or pillow for GIF support")
+            print("   pip install pillow")
+
 
 
 class GravityLaw(Protocol):
@@ -1533,12 +1686,26 @@ class GravityInterpreter:
         raise ValueError(f"Unsupported print expression: {expr}")
 
 
-def run_script_file(script_path: str, enable_3d: bool = False, viz_interval: int = 1) -> List[str]:
+def run_script_file(script_path: str, enable_3d: bool = False, viz_interval: int = 1, 
+                    create_animation: bool = False, anim_fps: int = 30) -> List[str]:
     script = Path(script_path).read_text(encoding="utf-8")
     interpreter = GravityInterpreter(enable_3d_viz=enable_3d, viz_interval=viz_interval)
     output = interpreter.execute(script)
+    
     if enable_3d and interpreter.visualizer:
+        # Create animation if requested
+        if create_animation:
+            anim_filename = "gravity_animation.gif"
+            print(f"\n🎬 Creating animation...")
+            interpreter.visualizer.create_animation(
+                interpreter.objects, 
+                output_file=anim_filename,
+                fps=anim_fps
+            )
+        
+        # Show final visualization
         interpreter.visualizer.show()  # Keep window open at end
+    
     return output
 
 
@@ -1585,6 +1752,10 @@ def main() -> int:
                            help="Enable 3D visualization (requires matplotlib)")
     run_parser.add_argument("--viz-interval", type=int, default=1, 
                            help="Visualization update interval (render every N steps)")
+    run_parser.add_argument("--animate", dest="create_animation", action="store_true",
+                           help="Create animation from simulation (requires --3d)")
+    run_parser.add_argument("--fps", type=int, default=30,
+                           help="Animation frames per second (default: 30)")
 
     check_parser = sub.add_parser("check", help="Parse and validate a .gravity script")
     check_parser.add_argument("check_file", help="Path to a .gravity script")
@@ -1608,8 +1779,18 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.command == "run":
-        output = run_script_file(args.run_file, enable_3d=args.enable_3d, 
-                                viz_interval=args.viz_interval)
+        # Validate animation requires 3D
+        if hasattr(args, 'create_animation') and args.create_animation and not args.enable_3d:
+            print("⚠️  Warning: --animate requires --3d flag. Enabling 3D visualization.")
+            args.enable_3d = True
+        
+        output = run_script_file(
+            args.run_file, 
+            enable_3d=args.enable_3d,
+            viz_interval=args.viz_interval,
+            create_animation=getattr(args, 'create_animation', False),
+            anim_fps=getattr(args, 'fps', 30)
+        )
         print("\n".join(output))
         return 0
 
