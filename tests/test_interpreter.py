@@ -13,6 +13,21 @@ class InterpreterTests(unittest.TestCase):
         self.assertEqual(earth.radius, 6371_000.0)
         self.assertEqual(earth.mass, 5.972e24)
 
+    def test_cube_object_supported(self):
+        src = "cube Box at [1,2,3] mass 10[kg]"
+        interp = GravityInterpreter()
+        interp.execute(src)
+        self.assertEqual(interp.objects["Box"].shape, "cube")
+
+    def test_parse_value_allows_whitespace(self):
+        interp = GravityInterpreter()
+        self.assertEqual(interp.parse_value("  1.5[km]  "), 1500.0)
+
+    def test_unknown_object_in_print_raises_value_error(self):
+        interp = GravityInterpreter()
+        with self.assertRaises(ValueError):
+            interp.execute("print Missing.position")
+
     def test_simulate_loop_and_observe_stream(self):
         out_file = "artifacts/moon_positions.csv"
         if os.path.exists(out_file):

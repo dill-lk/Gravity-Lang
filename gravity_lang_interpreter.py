@@ -53,7 +53,7 @@ def v_mag(v: Vec3) -> float:
 
 def v_norm(v: Vec3) -> Vec3:
     m = v_mag(v)
-    if m == 0:
+    if m <= 1e-12:
         return (0.0, 0.0, 0.0)
     return (v[0] / m, v[1] / m, v[2] / m)
 
@@ -175,6 +175,7 @@ class GravityInterpreter:
         self.physics_backend = physics_backend or PythonPhysicsBackend()
 
     def parse_value(self, token: str) -> float:
+        token = token.strip()
         m = re.fullmatch(r"([-+]?\d+(?:\.\d+)?(?:e[-+]?\d+)?)(?:\[([a-zA-Z]+)\])?", token)
         if not m:
             raise ValueError(f"Invalid numeric token: {token}")
@@ -193,6 +194,7 @@ class GravityInterpreter:
         return (self.parse_value(m.group(1)), self.parse_value(m.group(2)), self.parse_value(m.group(3)))
 
     def parse_quantity(self, token: str) -> Quantity:
+        token = token.strip()
         m = re.fullmatch(r"([-+]?\d+(?:\.\d+)?(?:e[-+]?\d+)?)(?:\[([^\]]+)\])?", token)
         if not m:
             raise ValueError(f"Invalid quantity token: {token}")
@@ -230,6 +232,11 @@ class GravityInterpreter:
                     return text[: idx + 1], text[idx + 1 :].strip()
         raise ValueError(f"Unterminated vector: {text}")
 
+    def _require_object(self, obj_name: str, context: str) -> Body:
+        if obj_name not in self.objects:
+            raise ValueError(f"Unknown object '{obj_name}' referenced in {context}")
+        return self.objects[obj_name]
+
     def execute(self, source: str) -> List[str]:
         lines = [ln.strip() for ln in source.splitlines() if ln.strip() and not ln.strip().startswith("#")]
         i = 0
@@ -240,7 +247,10 @@ class GravityInterpreter:
                 i += 1
             elif " pull " in line:
                 a, _, b = line.partition(" pull ")
-                self.pull_pairs.append((a.strip(), b.strip()))
+                source_name, target_name = a.strip(), b.strip()
+                self._require_object(source_name, "pull statement")
+                self._require_object(target_name, "pull statement")
+                self.pull_pairs.append((source_name, target_name))
                 i += 1
             elif line.startswith(("orbit ", "simulate ")):
                 i = self._run_loop(lines, i)
@@ -255,8 +265,11 @@ class GravityInterpreter:
         return self.output
 
     def _parse_object(self, line: str) -> None:
-        shape, rest = line.split(" ", 1)
-        name, rest = rest.split(" at ", 1)
+        try:
+            shape, rest = line.split(" ", 1)
+            name, rest = rest.split(" at ", 1)
+        except ValueError as exc:
+            raise ValueError(f"Invalid object declaration syntax: {line}") from exc
 
         try:
             position_token, trailing = self._split_leading_vector(rest)
@@ -326,7 +339,10 @@ class GravityInterpreter:
             for stmt in block:
                 if " pull " in stmt:
                     a, _, b = stmt.partition(" pull ")
-                    pair = (a.strip(), b.strip())
+                    source_name, target_name = a.strip(), b.strip()
+                    self._require_object(source_name, "pull statement")
+                    self._require_object(target_name, "pull statement")
+                    pair = (source_name, target_name)
                     if pair not in self.pull_pairs:
                         self.pull_pairs.append(pair)
             self.physics_backend.step(self.objects, self.pull_pairs, dt, integrator)
@@ -346,8 +362,10 @@ class GravityInterpreter:
         m = re.fullmatch(r'observe\s+(\w+)\.(position|velocity)\s+to\s+"([^"]+)"(?:\s+frequency\s+(\d+))?', line)
         if not m:
             raise ValueError(f"Invalid observe statement: {line}")
+        object_name = m.group(1)
+        self._require_object(object_name, "observe statement")
         observer = Observer(
-            object_name=m.group(1),
+            object_name=object_name,
             field_name=m.group(2),
             file_path=m.group(3),
             frequency=int(m.group(4) or "1"),
@@ -364,7 +382,7 @@ class GravityInterpreter:
         for observer in self.observers:
             if step_index % observer.frequency != 0:
                 continue
-            body = self.objects[observer.object_name]
+            body = self._require_object(observer.object_name, "observer stream")
             vec = body.position if observer.field_name == "position" else body.velocity
             with Path(observer.file_path).open("a", newline="", encoding="utf-8") as f:
                 writer = csv.writer(f)
@@ -374,12 +392,12 @@ class GravityInterpreter:
         expr = line.replace("print", "", 1).strip()
         if expr.endswith(".position"):
             obj_name = expr[: -len(".position")]
-            body = self.objects[obj_name]
+            body = self._require_object(obj_name, "print statement")
             self.output.append(f"{obj_name}.position={body.position}")
             return
         if expr.endswith(".velocity"):
             obj_name = expr[: -len(".velocity")]
-            body = self.objects[obj_name]
+            body = self._require_object(obj_name, "print statement")
             self.output.append(f"{obj_name}.velocity={body.velocity}")
             return
         raise ValueError(f"Unsupported print expression: {expr}")
