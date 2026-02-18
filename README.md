@@ -108,6 +108,9 @@ python gravity_lang_interpreter.py build-exe --name gravity-lang-v1.0 --outdir d
 
 This emits `dist/gravity-lang-v1.0` (or `dist/gravity-lang-v1.0.exe` on Windows). Use `--no-clean` if you want faster iterative local builds.
 
+python gravity_lang_interpreter.py examples/earth_moon.gravity
+```
+
 ## Tests
 
 ```bash
@@ -122,3 +125,8 @@ python -m unittest discover -s tests -v
 4. Add Go simulation control plane for remote orchestration.
 5. Add C# editor/renderer with camera/lights/inspector.
 6. Add Parquet/Arrow observers and plotting hooks (energy drift, phase diagrams).
+1. Replace `PythonPhysicsBackend` with a real C++ kernel (pybind11) and true RK4 implementation.
+2. Add Rust worker backend for parallel large-N body updates.
+3. Add Go simulation control plane for remote orchestration.
+4. Add C# editor/renderer with camera/lights/inspector.
+5. Add Parquet/Arrow observers and plotting hooks (energy drift, phase diagrams).

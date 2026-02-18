@@ -6,5 +6,11 @@ Moon.velocity = [0,1.022,0][km/s]
 
 orbit t in 0..24 dt 3600[s] integrator rk4 {
     step_physics(Moon, Earth)
+sphere Earth at [0,0,0] radius 6371[km] mass 5.972e24[kg]
+sphere Moon at [384400[km],0,0] radius 1737[km] mass 7.348e22[kg]
+
+Earth pull Moon
+
+orbit t in 0..24 dt 3600[s] {
     print Moon.position
 }

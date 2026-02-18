@@ -4,6 +4,9 @@ import unittest
 from unittest.mock import patch
 
 from gravity_lang_interpreter import GravityInterpreter, Quantity, build_executable, main
+import unittest
+
+from gravity_lang_interpreter import GravityInterpreter, Quantity
 
 
 class InterpreterTests(unittest.TestCase):
@@ -43,6 +46,7 @@ class InterpreterTests(unittest.TestCase):
         src = """
         sphere Earth at [0,0,0] mass 5.972e24[kg] fixed
         sphere Moon at [384400000,0,0][m] mass 7.348e22[kg] velocity [0,1022,0][m/s]
+        sphere Moon at [384400[km],0,0] mass 7.348e22[kg] velocity [0,1[km],0]
         simulate t in 0..3 step 60[s] integrator leapfrog {
             Earth pull Moon
             print Moon.position
