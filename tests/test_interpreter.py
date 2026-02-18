@@ -1,13 +1,17 @@
 import os
 import tempfile
+from pathlib import Path
 import unittest
 from unittest.mock import patch
+
+import gravity_lang_interpreter as gli
 
 from gravity_lang_interpreter import (
     GravityInterpreter,
     Quantity,
     build_executable,
     create_physics_backend,
+    create_windows_installer_bundle,
     benchmark_backends,
     main,
 )
@@ -224,6 +228,55 @@ class InterpreterTests(unittest.TestCase):
             build_executable("gravity-test", "dist", auto_install=True)
             self.assertEqual(run_mock.call_count, 2)
 
+
+
+
+    def test_export_interactive_3d_html_requires_plotly(self):
+        with patch.object(gli, "HAS_PLOTLY", False):
+            with self.assertRaises(RuntimeError):
+                gli.export_interactive_3d_html({}, output_file="artifacts/interactive.html")
+
+    def test_cli_run_interactive_flag(self):
+        with tempfile.NamedTemporaryFile("w", suffix=".gravity", delete=False) as tmp:
+            tmp.write("sphere Earth at [0,0,0] mass 5.972e24[kg]\n")
+            path = tmp.name
+        try:
+            with (
+                patch("gravity_lang_interpreter.run_script_file", return_value=[]),
+                patch("sys.argv", [
+                    "gravity_lang_interpreter.py",
+                    "run",
+                    path,
+                    "--interactive",
+                    "--interactive-out",
+                    "artifacts/out.html",
+                ]),
+            ):
+                code = main()
+            self.assertEqual(code, 0)
+        finally:
+            os.remove(path)
+
+    def test_create_windows_installer_bundle_outputs_files(self):
+        with tempfile.TemporaryDirectory() as td:
+            exe = Path(td) / "gravity-lang.exe"
+            exe.write_bytes(b"stub")
+            bundle = create_windows_installer_bundle(exe, td)
+            self.assertTrue((bundle / "gravity-lang.exe").exists())
+            self.assertTrue((bundle / "gravity.cmd").exists())
+            self.assertTrue((bundle / "install-gravity.ps1").exists())
+            self.assertTrue((bundle / "uninstall-gravity.ps1").exists())
+            self.assertTrue((bundle / "README-INSTALLER.txt").exists())
+
+
+    def test_build_executable_install_all_deps_invokes_pip(self):
+        with (
+            patch("gravity_lang_interpreter.shutil.which", return_value="/usr/bin/pyinstaller"),
+            patch("gravity_lang_interpreter.subprocess.run") as run_mock,
+        ):
+            build_executable("gravity-test", "dist", install_all_deps=True)
+            pip_cmd = run_mock.call_args_list[0][0][0]
+            self.assertIn("pip", pip_cmd)
 
     def test_build_executable_includes_visualization_assets(self):
         with (

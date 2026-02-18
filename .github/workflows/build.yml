@@ -67,15 +67,20 @@ jobs:
       - name: Install build dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pyinstaller numpy matplotlib pillow
+          pip install pyinstaller numpy matplotlib pillow plotly
 
-      - name: Build executable
-        run: python gravity_lang_interpreter.py build-exe --name ${{ matrix.exe_name }} --outdir dist
+      - name: Build executable (Windows + installer bundle)
+        if: runner.os == 'Windows'
+        run: python gravity_lang_interpreter.py build-exe --name ${{ matrix.exe_name }} --outdir dist --install-all-deps --with-installer
+
+      - name: Build executable (POSIX)
+        if: runner.os != 'Windows'
+        run: python gravity_lang_interpreter.py build-exe --name ${{ matrix.exe_name }} --outdir dist --install-all-deps
 
       - name: Generate visualization artifacts (Python, headless)
         if: runner.os != 'Windows'
         run: |
-          python gravity_lang_interpreter.py run examples/moon_orbit.gravity --backend auto --3d --animate --fps 12 --headless
+          python gravity_lang_interpreter.py run examples/moon_orbit.gravity --backend auto --3d --animate --fps 12 --headless --interactive --interactive-out dist/visuals/gravity_interactive_3d.html
           mkdir -p dist/visuals
           cp -f gravity_simulation_3d.png dist/visuals/ || true
           cp -f gravity_animation.gif dist/visuals/ || true
@@ -100,6 +105,13 @@ jobs:
         with:
           name: dist-${{ matrix.exe_name }}
           path: dist/**
+
+      - name: Upload Windows installer bundle
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: gravity-lang-windows-installer
+          path: dist/installer-windows/**
 
   release:
     name: Publish GitHub Release

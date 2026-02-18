@@ -90,20 +90,33 @@ python gravity_lang_interpreter.py run examples/moon_orbit.gravity
 pip install pyinstaller numpy
 
 # Build executable for your platform
-python gravity_lang_interpreter.py build-exe --name gravity-lang --outdir dist
+python gravity_lang_interpreter.py build-exe --name gravity-lang --outdir dist --install-all-deps
 
 # Run it
 ./dist/gravity-lang run examples/solar_system.gravity         # Linux/macOS
 .\dist\gravity-lang.exe run examples\solar_system.gravity     # Windows
 ```
-pip install pyinstaller numpy
 
-# Build executable
-python gravity_lang_interpreter.py build-exe --name gravity-lang --outdir dist
+**Windows UX installer bundle (adds `gravity` command to PATH):**
 
-# Run it
-./dist/gravity-lang run examples/solar_system.gravity
+```powershell
+python gravity_lang_interpreter.py build-exe --name gravity-lang-windows --outdir dist --with-installer
+cd dist\installer-windows
+.\install-gravity.ps1
+# Open a new terminal, then:
+gravity --version
 ```
+
+### Interactive 3D GUI/Viewer (HTML)
+
+```bash
+# Export interactive 3D model with hover details (mass, radius, velocity, position)
+python gravity_lang_interpreter.py run examples/moon_orbit.gravity --3d --headless --interactive --interactive-out artifacts/gravity_interactive_3d.html
+```
+
+Open the generated HTML file in a browser to rotate/zoom/pan and inspect object details.
+
+For more accurate GIF paths, prefer smaller simulation timesteps or adaptive mode in your script (e.g. `adaptive tol 1e-7 min 10[s] max 3600[s]`).
 
 ### Install as Python Package (Optional)
 
@@ -524,7 +537,7 @@ python gravity_lang_interpreter.py --version
 python gravity_lang_interpreter.py run examples/moon_orbit.gravity --3d --animate --headless
 
 # Build standalone executable
-python gravity_lang_interpreter.py build-exe --name gravity-lang --outdir dist
+python gravity_lang_interpreter.py build-exe --name gravity-lang --outdir dist --install-all-deps
 ```
 
 ---

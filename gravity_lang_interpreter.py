@@ -36,6 +36,14 @@ except ImportError:
     plt = None  # type: ignore
     HAS_MATPLOTLIB = False
 
+# Optional Plotly support for interactive 3D viewer
+try:
+    import plotly.graph_objects as go
+    HAS_PLOTLY = True
+except ImportError:
+    go = None  # type: ignore
+    HAS_PLOTLY = False
+
 
 # ============================================================================
 # Custom Exception Classes for Better Error Handling
@@ -424,24 +432,24 @@ class Visualizer3D:
             )
             self.ax.scatter([x], [y], [z], color=color, s=size, 
                           marker='o', edgecolors='black', linewidth=0.5, label=name)
-        
+
         # Auto-scale axes to fit all objects
         all_positions = [obj.position for obj in objects.values()]
         if all_positions:
             xs = [p[0] for p in all_positions]
             ys = [p[1] for p in all_positions]
             zs = [p[2] for p in all_positions]
-            
+
             # Add some padding
             x_range = max(xs) - min(xs) if len(xs) > 1 else 1e6
             y_range = max(ys) - min(ys) if len(ys) > 1 else 1e6
             z_range = max(zs) - min(zs) if len(zs) > 1 else 1e6
             max_range = max(x_range, y_range, z_range) * 1.2
-            
+
             mid_x = (max(xs) + min(xs)) / 2
             mid_y = (max(ys) + min(ys)) / 2
             mid_z = (max(zs) + min(zs)) / 2
-            
+
             self.ax.set_xlim(mid_x - max_range/2, mid_x + max_range/2)
             self.ax.set_ylim(mid_y - max_range/2, mid_y + max_range/2)
             self.ax.set_zlim(mid_z - max_range/2, mid_z + max_range/2)
@@ -496,7 +504,26 @@ class Visualizer3D:
             return
         
         print(f"📹 Creating animation with {max_frames} frames...")
-        
+
+        # Precompute global bounds for stable camera/scale across frames
+        all_points: List[Vec3] = []
+        for trajectory in self.trajectories.values():
+            all_points.extend(trajectory)
+        if all_points:
+            all_x = [p[0] for p in all_points]
+            all_y = [p[1] for p in all_points]
+            all_z = [p[2] for p in all_points]
+            x_range = max(all_x) - min(all_x) if len(all_x) > 1 else 1e6
+            y_range = max(all_y) - min(all_y) if len(all_y) > 1 else 1e6
+            z_range = max(all_z) - min(all_z) if len(all_z) > 1 else 1e6
+            global_max_range = max(x_range, y_range, z_range) * 1.2
+            global_mid_x = (max(all_x) + min(all_x)) / 2
+            global_mid_y = (max(all_y) + min(all_y)) / 2
+            global_mid_z = (max(all_z) + min(all_z)) / 2
+        else:
+            global_max_range = 1e6
+            global_mid_x = global_mid_y = global_mid_z = 0.0
+
         # Create figure for animation
         self.fig = plt.figure(figsize=(10, 8))
         self.ax = self.fig.add_subplot(111, projection='3d')
@@ -552,34 +579,10 @@ class Visualizer3D:
                     self.ax.scatter([x], [y], [z], color=color, s=size,
                                   marker='o', edgecolors='black', linewidth=0.5, label=name)
             
-            # Auto-scale axes
-            if all_positions_frame:
-                xs = [p[0] for p in all_positions_frame]
-                ys = [p[1] for p in all_positions_frame]
-                zs = [p[2] for p in all_positions_frame]
-                
-                # Get all trajectory points for consistent scaling
-                all_traj_points = []
-                for trajectory in self.trajectories.values():
-                    all_traj_points.extend(trajectory[:frame+1])
-                
-                if all_traj_points:
-                    all_xs = [p[0] for p in all_traj_points]
-                    all_ys = [p[1] for p in all_traj_points]
-                    all_zs = [p[2] for p in all_traj_points]
-                    
-                    x_range = max(all_xs) - min(all_xs) if len(all_xs) > 1 else 1e6
-                    y_range = max(all_ys) - min(all_ys) if len(all_ys) > 1 else 1e6
-                    z_range = max(all_zs) - min(all_zs) if len(all_zs) > 1 else 1e6
-                    max_range = max(x_range, y_range, z_range) * 1.2
-                    
-                    mid_x = (max(all_xs) + min(all_xs)) / 2
-                    mid_y = (max(all_ys) + min(all_ys)) / 2
-                    mid_z = (max(all_zs) + min(all_zs)) / 2
-                    
-                    self.ax.set_xlim(mid_x - max_range/2, mid_x + max_range/2)
-                    self.ax.set_ylim(mid_y - max_range/2, mid_y + max_range/2)
-                    self.ax.set_zlim(mid_z - max_range/2, mid_z + max_range/2)
+            # Use fixed global bounds for consistent/accurate animation framing
+            self.ax.set_xlim(global_mid_x - global_max_range/2, global_mid_x + global_max_range/2)
+            self.ax.set_ylim(global_mid_y - global_max_range/2, global_mid_y + global_max_range/2)
+            self.ax.set_zlim(global_mid_z - global_max_range/2, global_mid_z + global_max_range/2)
             
             self.ax.legend(loc='upper right', fontsize='small')
             return []
@@ -1869,6 +1872,7 @@ class GravityInterpreter:
         adaptive_min_dt: float,
         adaptive_max_dt: float,
         next_dt_hint: float,
+        on_substep_accepted: Callable[[], None] | None = None,
     ) -> float:
         remaining = dt
         trial_dt = min(max(next_dt_hint, adaptive_min_dt), adaptive_max_dt, dt)
@@ -1893,6 +1897,8 @@ class GravityInterpreter:
                 self._assign_objects_state(self.objects, two_half_state)
                 self._apply_friction(current_dt)
                 self._resolve_collisions()
+                if on_substep_accepted is not None:
+                    on_substep_accepted()
                 remaining -= current_dt
 
                 if relative_error <= 1e-16:
@@ -1951,6 +1957,9 @@ class GravityInterpreter:
         self._collect_inline_observers(block)
         has_explicit_step = any(stmt.startswith("step_physics") for stmt in block)
 
+        if self.visualizer:
+            self.visualizer.initialize(self.objects)
+
         step_index = 0
         for _ in range(begin, end):
             step_pairs = list(self.pull_pairs)
@@ -1996,6 +2005,7 @@ class GravityInterpreter:
                         adaptive_min_dt,
                         adaptive_max_dt,
                         next_dt_hint,
+                        on_substep_accepted=(self.visualizer.update if self.visualizer else None),
                     )
                 else:
                     self.physics_backend.step(self.objects, step_pairs, dt, integrator)
@@ -2026,9 +2036,8 @@ class GravityInterpreter:
             
             # Update 3D visualization if enabled
             if self.visualizer:
-                if step_index == 0:
-                    self.visualizer.initialize(self.objects)
-                self.visualizer.update(self.objects)
+                if not adaptive_enabled:
+                    self.visualizer.update(self.objects)
                 # Render every N steps to avoid slowdown
                 if step_index % self.visualizer.update_interval == 0:
                     self.visualizer.render(self.objects)
@@ -2159,7 +2168,9 @@ def create_physics_backend(name: BackendName, julia_bin: str = "julia") -> Physi
 def run_script_file(script_path: str, enable_3d: bool = False, viz_interval: int = 1, 
                     create_animation: bool = False, anim_fps: int = 30,
                     backend_name: BackendName = "auto", julia_bin: str = "julia",
-                    show_visualization: bool = True) -> List[str]:
+                    show_visualization: bool = True,
+                    export_interactive: bool = False,
+                    interactive_output_file: str = "gravity_interactive_3d.html") -> List[str]:
     script = Path(script_path).read_text(encoding="utf-8")
     interpreter = GravityInterpreter(
         physics_backend=create_physics_backend(backend_name, julia_bin=julia_bin),
@@ -2174,23 +2185,119 @@ def run_script_file(script_path: str, enable_3d: bool = False, viz_interval: int
             anim_filename = "gravity_animation.gif"
             print(f"\n🎬 Creating animation...")
             interpreter.visualizer.create_animation(
-                interpreter.objects, 
+                interpreter.objects,
                 output_file=anim_filename,
-                fps=anim_fps
+                fps=anim_fps,
             )
-        
+
+        if export_interactive:
+            html_out = export_interactive_3d_html(
+                interpreter.objects,
+                trajectories=interpreter.visualizer.trajectories,
+                output_file=interactive_output_file,
+            )
+            print(f"Saved interactive 3D viewer: {html_out}")
+
         # Show final visualization (skip in headless/non-interactive mode)
         if show_visualization:
             interpreter.visualizer.show()  # Keep window open at end
-    
+    elif export_interactive:
+        html_out = export_interactive_3d_html(
+            interpreter.objects,
+            trajectories=None,
+            output_file=interactive_output_file,
+        )
+        print(f"Saved interactive 3D viewer: {html_out}")
+
     return output
+
+
+def export_interactive_3d_html(
+    objects: Dict[str, Body],
+    trajectories: Dict[str, List[Vec3]] | None = None,
+    output_file: str = "gravity_interactive_3d.html",
+) -> Path:
+    """Export an interactive 3D HTML viewer with object details."""
+    if not HAS_PLOTLY:
+        raise RuntimeError("plotly is required for interactive 3D export. Install it with: pip install plotly")
+
+    trajectories = trajectories or {}
+    fig = go.Figure()
+
+    for name, obj in objects.items():
+        color = obj.color or "#1f77b4"
+        path = trajectories.get(name, [])
+
+        if path:
+            xs = [p[0] for p in path]
+            ys = [p[1] for p in path]
+            zs = [p[2] for p in path]
+            fig.add_trace(
+                go.Scatter3d(
+                    x=xs,
+                    y=ys,
+                    z=zs,
+                    mode="lines",
+                    name=f"{name} trajectory",
+                    line={"width": 3, "color": color},
+                    hoverinfo="skip",
+                    showlegend=False,
+                )
+            )
+
+        px, py, pz = obj.position
+        vx, vy, vz = obj.velocity
+        speed = math.sqrt(vx * vx + vy * vy + vz * vz)
+        details = (
+            f"<b>{name}</b><br>"
+            f"Shape: {obj.shape}<br>"
+            f"Mass: {obj.mass:.6e} kg<br>"
+            f"Radius: {obj.radius:.3f} m<br>"
+            f"Position: ({px:.3f}, {py:.3f}, {pz:.3f}) m<br>"
+            f"Velocity: ({vx:.3f}, {vy:.3f}, {vz:.3f}) m/s<br>"
+            f"Speed: {speed:.3f} m/s"
+        )
+
+        fig.add_trace(
+            go.Scatter3d(
+                x=[px],
+                y=[py],
+                z=[pz],
+                mode="markers+text",
+                text=[name],
+                textposition="top center",
+                name=name,
+                marker={"size": 7, "color": color},
+                hovertemplate=details + "<extra></extra>",
+            )
+        )
+
+    fig.update_layout(
+        title="Gravity-Lang Interactive 3D Viewer",
+        scene={
+            "xaxis_title": "X (m)",
+            "yaxis_title": "Y (m)",
+            "zaxis_title": "Z (m)",
+        },
+        legend={"orientation": "h", "y": 1.02, "x": 0.0},
+        template="plotly_dark",
+        margin={"l": 0, "r": 0, "t": 50, "b": 0},
+    )
+
+    out = Path(output_file)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    fig.write_html(str(out), include_plotlyjs="cdn")
+    return out
 
 
 def check_script_file(script_path: str, backend_name: BackendName = "auto", julia_bin: str = "julia") -> None:
     run_script_file(script_path, backend_name=backend_name, julia_bin=julia_bin)
 
 
-def build_executable(name: str, outdir: str, auto_install: bool = False, clean: bool = True) -> Path:
+def build_executable(name: str, outdir: str, auto_install: bool = False, clean: bool = True, with_installer: bool = False, install_all_deps: bool = False) -> Path:
+    if install_all_deps:
+        subprocess.run([sys.executable, "-m", "pip", "install", "numpy", "matplotlib", "pillow", "plotly", "pyinstaller"], check=True)
+
     pyinstaller = shutil.which("pyinstaller")
     if not pyinstaller and auto_install:
         subprocess.run([sys.executable, "-m", "pip", "install", "pyinstaller"], check=True)
@@ -2217,10 +2324,162 @@ def build_executable(name: str, outdir: str, auto_install: bool = False, clean: 
         outdir,
         "gravity_lang_interpreter.py",
     ]
+    include_numpy = HAS_NUMPY or install_all_deps
+    include_plotly = HAS_PLOTLY or install_all_deps
+
+    if include_numpy:
+        cmd[2:2] = ["--hidden-import", "numpy"]
+    if include_plotly:
+        cmd[2:2] = ["--hidden-import", "plotly"]
+        cmd[2:2] = ["--collect-data", "plotly"]
     if clean:
         cmd.insert(2, "--clean")
     subprocess.run(cmd, check=True)
-    return Path(outdir) / (f"{name}.exe" if sys.platform.startswith("win") else name)
+    exe_path = Path(outdir) / (f"{name}.exe" if sys.platform.startswith("win") else name)
+    if with_installer and sys.platform.startswith("win"):
+        bundle = create_windows_installer_bundle(exe_path, outdir)
+        print(f"Created installer bundle: {bundle}")
+    return exe_path
+
+
+
+
+def create_windows_installer_bundle(exe_path: Path, outdir: str) -> Path:
+    """Create a simple Windows installer bundle that adds `gravity` to PATH for current user."""
+    bundle_dir = Path(outdir) / "installer-windows"
+    bundle_dir.mkdir(parents=True, exist_ok=True)
+
+    target_exe = bundle_dir / "gravity-lang.exe"
+    shutil.copy2(exe_path, target_exe)
+
+    launcher_cmd = bundle_dir / "gravity.cmd"
+    launcher_cmd.write_text(
+        '@echo off\r\n"%~dp0gravity-lang.exe" %*\r\n',
+        encoding="utf-8",
+    )
+
+    install_ps1 = bundle_dir / "install-gravity.ps1"
+    install_ps1.write_text(
+        r"""$ErrorActionPreference = "Stop"
+$InstallDir = Join-Path $env:LOCALAPPDATA "Programs\Gravity-Lang"
+New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
+
+Copy-Item -Force "$PSScriptRoot\gravity-lang.exe" (Join-Path $InstallDir "gravity-lang.exe")
+Copy-Item -Force "$PSScriptRoot\gravity.cmd" (Join-Path $InstallDir "gravity.cmd")
+
+$UserPath = [Environment]::GetEnvironmentVariable("Path", "User")
+if (-not $UserPath) { $UserPath = "" }
+if ($UserPath -notlike "*${InstallDir}*") {
+    $NewPath = if ([string]::IsNullOrWhiteSpace($UserPath)) { $InstallDir } else { "$UserPath;$InstallDir" }
+    [Environment]::SetEnvironmentVariable("Path", $NewPath, "User")
+}
+
+reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\App Paths\gravity.exe" /ve /d "$InstallDir\gravity-lang.exe" /f | Out-Null
+reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\App Paths\gravity.exe" /v Path /d "$InstallDir" /f | Out-Null
+
+Write-Host "Installed Gravity Lang to $InstallDir"
+Write-Host "Open a new terminal and run: gravity --version"
+""",
+        encoding="utf-8",
+    )
+
+    uninstall_ps1 = bundle_dir / "uninstall-gravity.ps1"
+    uninstall_ps1.write_text(
+        r"""$ErrorActionPreference = "Stop"
+$InstallDir = Join-Path $env:LOCALAPPDATA "Programs\Gravity-Lang"
+if (Test-Path $InstallDir) {
+    Remove-Item -Recurse -Force $InstallDir
+}
+
+$UserPath = [Environment]::GetEnvironmentVariable("Path", "User")
+if ($UserPath) {
+    $parts = $UserPath -split ";" | Where-Object { $_ -and ($_ -ne $InstallDir) }
+    [Environment]::SetEnvironmentVariable("Path", ($parts -join ";"), "User")
+}
+
+reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\App Paths\gravity.exe" /f 2>$null | Out-Null
+Write-Host "Uninstalled Gravity Lang"
+""",
+        encoding="utf-8",
+    )
+
+    readme = bundle_dir / "README-INSTALLER.txt"
+    readme.write_text(
+        r"""Gravity Lang Windows Installer Bundle
+
+1) Right click PowerShell and Run as your user (admin not required)
+2) Run: .\install-gravity.ps1
+3) Open a new terminal and run: gravity --version
+
+To uninstall: .\uninstall-gravity.ps1
+""",
+        encoding="utf-8",
+    )
+
+    return bundle_dir
+
+
+def benchmark_backends(
+    object_count: int = 200,
+    steps: int = 20,
+    dt: float = 1.0,
+    repeats: int = 3,
+    warmup_steps: int = 2,
+    backend_names: List[str] | None = None,
+) -> Dict[str, float]:
+    if object_count < 2:
+        raise ValueError("object_count must be >= 2")
+    if steps < 1 or repeats < 1 or warmup_steps < 0:
+        raise ValueError("steps/repeats must be >= 1 and warmup_steps must be >= 0")
+
+    def build_case() -> tuple[Dict[str, Body], List[Tuple[str, str]]]:
+        objects: Dict[str, Body] = {}
+        for i in range(object_count):
+            objects[f"B{i}"] = Body(
+                name=f"B{i}",
+                shape="pointmass",
+                position=(float(i * 1000), float((i % 13) * 300), float((i % 7) * 200)),
+                velocity=(0.0, 0.0, 0.0),
+                mass=5.0e20 + i * 1.0e17,
+                radius=1.0,
+            )
+        pairs = [(f"B{i}", f"B{j}") for i in range(object_count) for j in range(object_count) if i != j]
+        return objects, pairs
+
+    selected = backend_names or ["python", "numpy", "cpp"]
+    backends: Dict[str, PhysicsBackend] = {}
+    for name in selected:
+        try:
+            backends[name] = create_physics_backend(name)  # type: ignore[arg-type]
+        except Exception:
+            continue
+
+    if "python" not in backends:
+        backends["python"] = PythonPhysicsBackend()
+
+    timings: Dict[str, float] = {}
+    for name, backend in backends.items():
+        objs, pairs = build_case()
+
+        for _ in range(warmup_steps):
+            backend.step(objs, pairs, dt, "verlet")
+
+        samples: List[float] = []
+        for _ in range(repeats):
+            objs, pairs = build_case()
+            start = time.perf_counter()
+            for _ in range(steps):
+                backend.step(objs, pairs, dt, "verlet")
+            samples.append((time.perf_counter() - start) * 1000.0)
+
+        timings[name] = statistics.median(samples)
+        timings[f"{name}_mean_ms"] = statistics.mean(samples)
+
+    baseline = timings.get("python", 1.0)
+    for name, elapsed in list(timings.items()):
+        if name in backends and name != "python":
+            timings[f"{name}_speedup"] = baseline / max(elapsed, 1e-9)
+    return timings
 
 
 def benchmark_backends(
@@ -2310,6 +2569,10 @@ def main() -> int:
                            help="Julia binary path when using --backend julia_diffeq")
     run_parser.add_argument("--headless", action="store_true",
                            help="Run visualization/animation generation without opening window")
+    run_parser.add_argument("--interactive", dest="interactive_viewer", action="store_true",
+                           help="Export an interactive 3D HTML viewer with object details (requires plotly)")
+    run_parser.add_argument("--interactive-out", default="gravity_interactive_3d.html",
+                           help="Output HTML path for --interactive export")
 
     check_parser = sub.add_parser("check", help="Parse and validate a .gravity script")
     check_parser.add_argument("check_file", help="Path to a .gravity script")
@@ -2343,6 +2606,16 @@ def main() -> int:
         action="store_true",
         help="Disable PyInstaller clean mode",
     )
+    exe_parser.add_argument(
+        "--with-installer",
+        action="store_true",
+        help="Windows only: create installer bundle that registers `gravity` command",
+    )
+    exe_parser.add_argument(
+        "--install-all-deps",
+        action="store_true",
+        help="Install full standalone dependency set (numpy/matplotlib/pillow/plotly/pyinstaller) before build",
+    )
 
     parser.add_argument("legacy_file", nargs="?", help="Backward-compatible: run a .gravity script directly")
 
@@ -2363,6 +2636,8 @@ def main() -> int:
             backend_name=getattr(args, 'backend', 'python'),
             julia_bin=getattr(args, 'julia_bin', 'julia'),
             show_visualization=not getattr(args, 'headless', False),
+            export_interactive=getattr(args, 'interactive_viewer', False),
+            interactive_output_file=getattr(args, 'interactive_out', 'gravity_interactive_3d.html'),
         )
         print("\n".join(output))
         return 0
@@ -2412,6 +2687,8 @@ def main() -> int:
             args.outdir,
             auto_install=args.install_pyinstaller,
             clean=not args.no_clean,
+            with_installer=getattr(args, "with_installer", False),
+            install_all_deps=getattr(args, "install_all_deps", False),
         )
         print(f"Built executable: {output_path}")
         return 0
