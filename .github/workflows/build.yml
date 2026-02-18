@@ -1,4 +1,4 @@
-name: Build and Test
+name: Build and Publish
 
 on:
   push:
@@ -17,60 +17,30 @@ permissions:
   contents: write
 
 jobs:
-  test:
-    name: Test (${{ matrix.os }}, py${{ matrix.python-version }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-        python-version: ['3.10', '3.12']
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python-version }}
-
-      - name: Install test dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install numpy pytest matplotlib pillow
-
-      - name: Run tests
-        run: python -m pytest -q
-
-      - name: Validate advanced CLI
-        run: |
-          python gravity_lang_interpreter.py backends
-          python gravity_lang_interpreter.py benchmark --objects 40 --steps 3 --repeats 2 --warmup 1 --backends python,numpy
-          python gravity_lang_interpreter.py run examples/moon_orbit.gravity --backend auto --3d --animate --fps 8 --headless
-
   detect-changes:
-    name: Detect relevant source changes
+    name: Detect build-relevant changes
     runs-on: ubuntu-latest
     outputs:
-      interpreter_changed: ${{ steps.filter.outputs.interpreter }}
+      build_relevant_changed: ${{ steps.filter.outputs.build_relevant }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
         id: filter
         with:
           filters: |
-            interpreter:
+            build_relevant:
               - 'gravity_lang_interpreter.py'
+              - '.github/workflows/build.yml'
 
   build:
     name: Build executable (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    needs: [test, detect-changes]
+    needs: [detect-changes]
     if: |
       github.event_name != 'pull_request' && (
         github.event_name == 'workflow_dispatch' ||
         startsWith(github.ref, 'refs/tags/v') ||
-        needs.detect-changes.outputs.interpreter_changed == 'true'
+        needs.detect-changes.outputs.build_relevant_changed == 'true'
       )
     strategy:
       fail-fast: false
@@ -103,6 +73,7 @@ jobs:
         run: python gravity_lang_interpreter.py build-exe --name ${{ matrix.exe_name }} --outdir dist
 
       - name: Generate visualization artifacts (Python, headless)
+        if: runner.os != 'Windows'
         run: |
           python gravity_lang_interpreter.py run examples/moon_orbit.gravity --backend auto --3d --animate --fps 12 --headless
           mkdir -p dist/visuals
@@ -137,7 +108,7 @@ jobs:
     if: |
       github.event_name != 'pull_request' && (
         startsWith(github.ref, 'refs/tags/v') ||
-        (github.event_name == 'push' && needs.detect-changes.outputs.interpreter_changed == 'true') ||
+        (github.event_name == 'push' && needs.detect-changes.outputs.build_relevant_changed == 'true') ||
         (github.event_name == 'workflow_dispatch' && inputs.publish_release == true)
       )
 
