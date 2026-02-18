@@ -28,7 +28,7 @@ simulate t in 0..28 step 3600[s] integrator verlet {
 
 - **🎯 Simple Syntax** - No boilerplate, just physics
 - **🧠 Control Flow** - `let` variables and inline `if ... then ...` conditions
-- **⚡ Fast** - NumPy + optional C++ kernel backend for major speedups on large simulations
+- **⚡ Fast** - C++ kernel backend is the default runtime path for major speedups on large simulations
 - **🔬 Scientific** - Adaptive timestep support + 4 integrators (Leapfrog, RK4, Verlet, Euler)
 - **🧪 Advanced Solvers** - Optional Julia DifferentialEquations.jl backend (Tsit5)
 - **✅ Accurate** - Validated against NASA data with < 2% error
@@ -129,10 +129,12 @@ pip install matplotlib  # For 3D visualization
 Backend selection:
 
 ```bash
-# default is --backend auto (prefers cpp, then numpy, then julia_diffeq if julia exists, then python)
+# default is --backend cpp (use --backend auto for smart fallback selection)
 python gravity_lang_interpreter.py run examples/solar_system.gravity
 python gravity_lang_interpreter.py run examples/solar_system.gravity --backend numpy
 python gravity_lang_interpreter.py run examples/solar_system.gravity --backend cpp
+# Optional: disable OpenMP when compiling C++ kernel
+GRAVITY_CPP_OPENMP=0 python gravity_lang_interpreter.py run examples/solar_system.gravity --backend cpp
 python gravity_lang_interpreter.py run examples/solar_system.gravity --backend julia_diffeq --julia-bin julia
 ```
 
@@ -436,9 +438,9 @@ simulate t in 0..365 step 86400[s] integrator leapfrog {
 
 ## 🔬 Advanced Features
 
-### High-Performance NumPy Backend
+### High-Performance Backend (C++ Default)
 
-For large N-body simulations (100+ objects), use the NumPy backend:
+For large N-body simulations (100+ objects), C++ backend is the default and recommended path:
 
 ```python
 from gravity_lang_interpreter import GravityInterpreter, NumPyPhysicsBackend
@@ -447,6 +449,31 @@ from gravity_lang_interpreter import GravityInterpreter, NumPyPhysicsBackend
 interp = GravityInterpreter(physics_backend=NumPyPhysicsBackend())
 output = interp.execute(script)
 ```
+
+### Native C++ Compiler (`gravityc`)
+
+You can now compile `.gravity` scripts into generated C++ and native executables:
+
+```bash
+# Build gravityc itself
+g++ -O3 -std=c++17 cpp/gravity_compiler.cpp -o gravityc
+
+# Or build gravityc via CLI (produces dist/gravityc or dist/gravityc.exe)
+python gravity_lang_interpreter.py build-cpp-exe --outdir dist
+
+# Emit C++ from Gravity script
+./gravityc examples/moon_orbit.gravity --emit artifacts/moon_orbit.generated.cpp
+
+# Emit + build native executable
+./gravityc examples/moon_orbit.gravity --emit artifacts/moon_orbit.generated.cpp --build artifacts/moon_orbit_native
+
+# Emit + build + run in one command
+./gravityc examples/moon_orbit.gravity --emit artifacts/moon_orbit.generated.cpp --build artifacts/moon_orbit_native --run
+```
+
+`gravityc` currently supports native codegen for `sphere`, `grav all`, `pull`, velocity assignment,
+`orbit/simulate` loops (including integrator hints for `verlet`/`leapfrog`/`euler`), `friction`,
+`thrust`, `observe <name>.position ... frequency`, and `print <name>.position|velocity`.
 
 ### Custom Gravity Laws
 
