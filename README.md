@@ -198,6 +198,47 @@ orbit t in 0..24 dt 3600[s] integrator rk4 {
     Earth pull Moon
 }
 
+---
+
+## 🌌 Example: Galaxy Collision
+
+See `examples/galaxy_collision.gravity` for a complete demonstration of:
+- **Comma-separated pull syntax** - Cleanly define multiple gravitational interactions
+- **Color-coded objects** - Visualize different galaxies with colors
+- **N-body simulation** - Two galaxies (7 objects total) with realistic dynamics
+
+```gravity
+# Milky Way core (blue)
+sphere MilkyWay_Core at [0,0,0][km] mass 4e36[kg] color "cyan" fixed
+
+# 3 stars orbiting Milky Way
+sphere StarA1 at [2e14,0,0][km] mass 2e30[kg] velocity [0,220000,0][m/s] color "lightblue"
+sphere StarA2 at [-2e14,0,0][km] mass 2e30[kg] velocity [0,-220000,0][m/s] color "lightblue"
+sphere StarA3 at [0,2e14,0][km] mass 1.8e30[kg] velocity [-220000,0,0][m/s] color "deepskyblue"
+
+# Andromeda core approaching (red)
+sphere Andromeda_Core at [8e14,0,0][km] mass 5e36[kg] velocity [-100000,0,0][m/s] color "magenta"
+
+# 3 stars orbiting Andromeda
+sphere StarB1 at [1e15,0,0][km] mass 2.2e30[kg] velocity [-100000,250000,0][m/s] color "pink"
+# ... more stars
+
+# Gravitational interactions using comma-separated syntax!
+MilkyWay_Core pull StarA1, StarA2, StarA3
+Andromeda_Core pull StarB1, StarB2, StarB3
+
+simulate t in 0..10 step 1[day] integrator verlet {
+    # Watch the galaxies interact!
+}
+```
+
+**Run with visualization:**
+```bash
+python gravity_lang_interpreter.py run examples/galaxy_collision.gravity --3d
+```
+
+---
+
 ### 5. Integrators
 
 Choose the right integrator for your simulation:
