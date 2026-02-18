@@ -1,0 +1,17 @@
+# Advanced Gravity-Lang features demonstration
+# Showcasing new integrators and orbital element calculations
+
+sphere Earth at [0,0,0] radius 6371[km] mass 5.972e24[kg] fixed
+sphere Satellite at [7000,0,0][km] radius 1[m] mass 500[kg] velocity [0,7.5,0][km/s]
+
+# Calculate initial orbital elements
+orbital_elements Satellite around Earth
+
+# Run simulation with Verlet integrator (more stable than Euler)
+simulate t in 0..5 step 60[s] integrator verlet {
+    Earth pull Satellite
+    print Satellite.position
+}
+
+# Calculate final orbital elements to see if orbit is stable
+orbital_elements Satellite around Earth
