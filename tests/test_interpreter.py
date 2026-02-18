@@ -27,6 +27,26 @@ class InterpreterTests(unittest.TestCase):
         self.assertTrue(output[0].startswith("Moon.position="))
         self.assertNotEqual(output[0], output[1])
 
+    def test_custom_backend_can_be_injected(self):
+        class NoOpBackend:
+            def __init__(self):
+                self.calls = 0
+
+            def step(self, objects, pull_pairs, dt):
+                self.calls += 1
+
+        backend = NoOpBackend()
+        src = """
+        sphere Earth at [0,0,0] radius 6371[km] mass 5.972e24[kg]
+        orbit t in 0..3 dt 1[s] {
+            print Earth.position
+        }
+        """
+        interp = GravityInterpreter(physics_backend=backend)
+        output = interp.execute(src)
+        self.assertEqual(backend.calls, 3)
+        self.assertEqual(len(output), 3)
+
 
 if __name__ == "__main__":
     unittest.main()

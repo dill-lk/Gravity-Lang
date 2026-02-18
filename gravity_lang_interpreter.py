@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 import re
 from dataclasses import dataclass, field
-from typing import Dict, List, Tuple
+from typing import Dict, List, Protocol, Tuple
 
 G = 6.67430e-11
 
@@ -13,7 +13,6 @@ UNIT_SCALE = {
     "s": 1.0,
     "kg": 1.0,
 }
-
 
 Vec3 = Tuple[float, float, float]
 
@@ -52,14 +51,47 @@ class Body:
     properties: Dict[str, float] = field(default_factory=dict)
 
 
+class PhysicsBackend(Protocol):
+    """Interface expected from a physics engine backend (Python, C++, Rust, etc.)."""
+
+    def step(self, objects: Dict[str, Body], pull_pairs: List[Tuple[str, str]], dt: float) -> None:
+        ...
+
+
+class PythonPhysicsBackend:
+    """Reference physics backend in Python.
+
+    Keeps the interpreter usable today while exposing a clean seam where C++/Rust backends
+    can be connected later through ctypes/cffi/pybind11.
+    """
+
+    def step(self, objects: Dict[str, Body], pull_pairs: List[Tuple[str, str]], dt: float) -> None:
+        accelerations: Dict[str, Vec3] = {name: (0.0, 0.0, 0.0) for name in objects}
+
+        for source_name, target_name in pull_pairs:
+            source = objects[source_name]
+            target = objects[target_name]
+            displacement = v_sub(source.position, target.position)
+            r = max(v_mag(displacement), 1e-9)
+            acc_mag = G * source.mass / (r**2)
+            acc = v_scale(v_norm(displacement), acc_mag)
+            accelerations[target_name] = v_add(accelerations[target_name], acc)
+
+        for name, body in objects.items():
+            new_velocity = v_add(body.velocity, v_scale(accelerations[name], dt))
+            new_position = v_add(body.position, v_scale(new_velocity, dt))
+            body.velocity = new_velocity
+            body.position = new_position
+
+
 class GravityInterpreter:
-    def __init__(self) -> None:
+    def __init__(self, physics_backend: PhysicsBackend | None = None) -> None:
         self.objects: Dict[str, Body] = {}
         self.pull_pairs: List[Tuple[str, str]] = []
         self.output: List[str] = []
+        self.physics_backend = physics_backend or PythonPhysicsBackend()
 
     def parse_value(self, token: str) -> float:
-        """Parse numeric values with optional units, e.g. 6371[km]."""
         m = re.fullmatch(r"([-+]?\d+(?:\.\d+)?(?:e[-+]?\d+)?)(?:\[([a-zA-Z]+)\])?", token)
         if not m:
             raise ValueError(f"Invalid numeric token: {token}")
@@ -104,16 +136,12 @@ class GravityInterpreter:
         pos_token, rest = rest.split(" radius ", 1)
         radius_token, rest = rest.split(" mass ", 1)
 
-        pos = self.parse_vector(pos_token.strip())
-        radius = self.parse_value(radius_token.strip())
-        mass = self.parse_value(rest.strip())
-
         self.objects[name.strip()] = Body(
             name=name.strip(),
             shape=shape,
-            position=pos,
-            radius=radius,
-            mass=mass,
+            position=self.parse_vector(pos_token.strip()),
+            radius=self.parse_value(radius_token.strip()),
+            mass=self.parse_value(rest.strip()),
         )
 
     def _run_orbit(self, lines: List[str], start: int) -> int:
@@ -134,29 +162,11 @@ class GravityInterpreter:
             raise ValueError("orbit block missing closing brace")
 
         for _ in range(begin, end):
-            self._step(dt)
+            self.physics_backend.step(self.objects, self.pull_pairs, dt)
             for stmt in block:
                 if stmt.startswith("print "):
                     self._exec_print(stmt)
         return i + 1
-
-    def _step(self, dt: float) -> None:
-        accelerations: Dict[str, Vec3] = {name: (0.0, 0.0, 0.0) for name in self.objects}
-
-        for source_name, target_name in self.pull_pairs:
-            source = self.objects[source_name]
-            target = self.objects[target_name]
-            displacement = v_sub(source.position, target.position)
-            r = max(v_mag(displacement), 1e-9)
-            force_mag = G * source.mass / (r**2)
-            acc = v_scale(v_norm(displacement), force_mag)
-            accelerations[target_name] = v_add(accelerations[target_name], acc)
-
-        for name, body in self.objects.items():
-            new_velocity = v_add(body.velocity, v_scale(accelerations[name], dt))
-            new_position = v_add(body.position, v_scale(new_velocity, dt))
-            body.velocity = new_velocity
-            body.position = new_position
 
     def _exec_print(self, line: str) -> None:
         expr = line.replace("print", "", 1).strip()
@@ -164,8 +174,8 @@ class GravityInterpreter:
             obj_name = expr[: -len(".position")]
             body = self.objects[obj_name]
             self.output.append(f"{obj_name}.position={body.position}")
-        else:
-            raise ValueError(f"Unsupported print expression: {expr}")
+            return
+        raise ValueError(f"Unsupported print expression: {expr}")
 
 
 if __name__ == "__main__":
