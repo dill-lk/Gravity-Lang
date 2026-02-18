@@ -3,11 +3,15 @@ from __future__ import annotations
 import csv
 import math
 import re
+import shutil
+import subprocess
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Literal, Protocol, Tuple
 
 G = 6.67430e-11
+GRAVITY_LANG_VERSION = "1.0.0"
 
 UNIT_SCALE = {
     "m": 1.0,
@@ -18,6 +22,13 @@ UNIT_SCALE = {
     "day": 86400.0,
     "days": 86400.0,
     "kg": 1.0,
+}
+
+VECTOR_UNIT_SCALE = {
+    "m": 1.0,
+    "km": 1000.0,
+    "m/s": 1.0,
+    "km/s": 1000.0,
 }
 
 BASE_DIMS = {
@@ -49,6 +60,10 @@ def v_scale(v: Vec3, s: float) -> Vec3:
 
 def v_mag(v: Vec3) -> float:
     return math.sqrt(v[0] ** 2 + v[1] ** 2 + v[2] ** 2)
+
+
+def v_dot(a: Vec3, b: Vec3) -> float:
+    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 
 
 def v_norm(v: Vec3) -> Vec3:
@@ -118,6 +133,16 @@ class PhysicsBackend(Protocol):
 
 
 class PythonPhysicsBackend:
+    def _accelerations_for_positions(
+        self,
+        objects: Dict[str, Body],
+        pull_pairs: List[Tuple[str, str]],
+        positions: Dict[str, Vec3],
+    ) -> Dict[str, Vec3]:
+        accelerations: Dict[str, Vec3] = {name: (0.0, 0.0, 0.0) for name in objects}
+        for source_name, target_name in pull_pairs:
+            source = objects[source_name]
+            displacement = v_sub(positions[source_name], positions[target_name])
     def _accelerations(self, objects: Dict[str, Body], pull_pairs: List[Tuple[str, str]]) -> Dict[str, Vec3]:
         accelerations: Dict[str, Vec3] = {name: (0.0, 0.0, 0.0) for name in objects}
         for source_name, target_name in pull_pairs:
@@ -129,6 +154,10 @@ class PythonPhysicsBackend:
             acc = v_scale(v_norm(displacement), acc_mag)
             accelerations[target_name] = v_add(accelerations[target_name], acc)
         return accelerations
+
+    def _accelerations(self, objects: Dict[str, Body], pull_pairs: List[Tuple[str, str]]) -> Dict[str, Vec3]:
+        positions = {name: body.position for name, body in objects.items()}
+        return self._accelerations_for_positions(objects, pull_pairs, positions)
 
     def _step_leapfrog(self, objects: Dict[str, Body], pull_pairs: List[Tuple[str, str]], dt: float) -> None:
         accelerations = self._accelerations(objects, pull_pairs)
@@ -146,6 +175,61 @@ class PythonPhysicsBackend:
             body.velocity = v_add(half_velocities[name], v_scale(accelerations_2[name], dt * 0.5))
 
     def _step_rk4(self, objects: Dict[str, Body], pull_pairs: List[Tuple[str, str]], dt: float) -> None:
+        movable = [name for name, body in objects.items() if not body.fixed]
+        base_pos = {name: body.position for name, body in objects.items()}
+        base_vel = {name: body.velocity for name, body in objects.items()}
+
+        def shifted_positions(k_pos: Dict[str, Vec3], scale: float) -> Dict[str, Vec3]:
+            positions = dict(base_pos)
+            for name in movable:
+                positions[name] = v_add(base_pos[name], v_scale(k_pos[name], scale))
+            return positions
+
+        def shifted_velocities(k_vel: Dict[str, Vec3], scale: float) -> Dict[str, Vec3]:
+            velocities = dict(base_vel)
+            for name in movable:
+                velocities[name] = v_add(base_vel[name], v_scale(k_vel[name], scale))
+            return velocities
+
+        acc1 = self._accelerations_for_positions(objects, pull_pairs, base_pos)
+        k1_r = {name: base_vel[name] for name in movable}
+        k1_v = {name: acc1[name] for name in movable}
+
+        pos2 = shifted_positions(k1_r, dt * 0.5)
+        vel2 = shifted_velocities(k1_v, dt * 0.5)
+        acc2 = self._accelerations_for_positions(objects, pull_pairs, pos2)
+        k2_r = {name: vel2[name] for name in movable}
+        k2_v = {name: acc2[name] for name in movable}
+
+        pos3 = shifted_positions(k2_r, dt * 0.5)
+        vel3 = shifted_velocities(k2_v, dt * 0.5)
+        acc3 = self._accelerations_for_positions(objects, pull_pairs, pos3)
+        k3_r = {name: vel3[name] for name in movable}
+        k3_v = {name: acc3[name] for name in movable}
+
+        pos4 = shifted_positions(k3_r, dt)
+        vel4 = shifted_velocities(k3_v, dt)
+        acc4 = self._accelerations_for_positions(objects, pull_pairs, pos4)
+        k4_r = {name: vel4[name] for name in movable}
+        k4_v = {name: acc4[name] for name in movable}
+
+        for name in movable:
+            new_pos = v_add(
+                base_pos[name],
+                v_scale(
+                    v_add(v_add(k1_r[name], v_scale(v_add(k2_r[name], k3_r[name]), 2.0)), k4_r[name]),
+                    dt / 6.0,
+                ),
+            )
+            new_vel = v_add(
+                base_vel[name],
+                v_scale(
+                    v_add(v_add(k1_v[name], v_scale(v_add(k2_v[name], k3_v[name]), 2.0)), k4_v[name]),
+                    dt / 6.0,
+                ),
+            )
+            objects[name].position = new_pos
+            objects[name].velocity = new_vel
         # Practical approximation: use two half leapfrog steps to keep implementation compact.
         self._step_leapfrog(objects, pull_pairs, dt * 0.5)
         self._step_leapfrog(objects, pull_pairs, dt * 0.5)
@@ -172,6 +256,13 @@ class GravityInterpreter:
         self.pull_pairs: List[Tuple[str, str]] = []
         self.output: List[str] = []
         self.observers: List[Observer] = []
+        self.global_friction = 0.0
+        self.enable_collisions = True
+        self.physics_backend = physics_backend or PythonPhysicsBackend()
+
+    def _format_float(self, value: float) -> str:
+        return f"{value:.6e}"
+
         self.physics_backend = physics_backend or PythonPhysicsBackend()
 
     def parse_value(self, token: str) -> float:
@@ -188,6 +279,27 @@ class GravityInterpreter:
         return value
 
     def parse_vector(self, token: str) -> Vec3:
+        token = token.strip()
+        m = re.fullmatch(r"(\[[^\]]+\])(?:\[([a-zA-Z/]+)\])?", token)
+        if not m:
+            raise ValueError(f"Invalid vector token: {token}")
+
+        vector_text = m.group(1)
+        unit = m.group(2)
+        inner = vector_text[1:-1]
+        parts = [part.strip() for part in inner.split(",")]
+        if len(parts) != 3:
+            raise ValueError(f"Vector must have 3 components: {token}")
+
+        if unit:
+            if unit not in VECTOR_UNIT_SCALE:
+                raise ValueError(f"Unsupported vector unit: {unit}")
+            if any("[" in part for part in parts):
+                raise ValueError("Vector components must be unitless when using vector suffix units")
+            scale = VECTOR_UNIT_SCALE[unit]
+            return (float(parts[0]) * scale, float(parts[1]) * scale, float(parts[2]) * scale)
+
+        return (self.parse_value(parts[0]), self.parse_value(parts[1]), self.parse_value(parts[2]))
         m = re.fullmatch(r"\[\s*([^,]+)\s*,\s*([^,]+)\s*,\s*([^\]]+)\s*\]", token)
         if not m:
             raise ValueError(f"Invalid vector token: {token}")
@@ -238,12 +350,33 @@ class GravityInterpreter:
         return self.objects[obj_name]
 
     def execute(self, source: str) -> List[str]:
+        cleaned_lines: List[str] = []
+        for raw_line in source.splitlines():
+            line = raw_line.split("#", 1)[0].strip()
+            if line:
+                cleaned_lines.append(line)
+        lines = cleaned_lines
         lines = [ln.strip() for ln in source.splitlines() if ln.strip() and not ln.strip().startswith("#")]
         i = 0
         while i < len(lines):
             line = lines[i]
             if line.startswith(("sphere ", "cube ", "pointmass ", "probe ")):
                 self._parse_object(line)
+                i += 1
+            elif ".velocity" in line and "=" in line:
+                self._parse_velocity_assignment(line)
+                i += 1
+            elif line == "grav all":
+                self._add_gravity_all_pairs()
+                i += 1
+            elif line.startswith("friction "):
+                self._parse_friction(line)
+                i += 1
+            elif line.startswith("collisions "):
+                self._parse_collisions(line)
+                i += 1
+            elif line.startswith("thrust "):
+                self._parse_thrust(line)
                 i += 1
             elif " pull " in line:
                 a, _, b = line.partition(" pull ")
@@ -256,6 +389,9 @@ class GravityInterpreter:
                 i = self._run_loop(lines, i)
             elif line.startswith("print "):
                 self._exec_print(line)
+                i += 1
+            elif line == "monitor energy":
+                self._exec_monitor_energy()
                 i += 1
             elif line.startswith("observe "):
                 self._parse_observe(line)
@@ -275,6 +411,11 @@ class GravityInterpreter:
             position_token, trailing = self._split_leading_vector(rest)
         except ValueError as exc:
             raise ValueError(f"Object declaration missing position vector: {line}") from exc
+
+        if trailing.startswith("["):
+            vector_suffix, trailing = self._split_leading_vector(trailing)
+            position_token = f"{position_token}{vector_suffix}"
+
         position = self.parse_vector(position_token)
 
         m_mass = re.search(r"mass\s+([^\s]+)", trailing)
@@ -292,6 +433,11 @@ class GravityInterpreter:
 
         if "velocity" in trailing:
             vel_tail = trailing.split("velocity", 1)[1].strip()
+            velocity_vector, vel_remaining = self._split_leading_vector(vel_tail)
+            if vel_remaining.startswith("["):
+                vel_unit, _ = self._split_leading_vector(vel_remaining)
+                velocity_vector = f"{velocity_vector}{vel_unit}"
+            velocity = self.parse_vector(velocity_vector)
             velocity_token, _ = self._split_leading_vector(vel_tail)
             velocity = self.parse_vector(velocity_token)
 
@@ -304,6 +450,145 @@ class GravityInterpreter:
             mass=mass,
             fixed=fixed,
         )
+
+    def _parse_velocity_assignment(self, line: str) -> None:
+        m = re.fullmatch(r"(\w+)\.velocity\s*=\s*(.+)", line)
+        if not m:
+            raise ValueError(f"Invalid velocity assignment syntax: {line}")
+        obj_name = m.group(1)
+        body = self._require_object(obj_name, "velocity assignment")
+        body.velocity = self.parse_vector(m.group(2).strip())
+
+    def _parse_step_physics(self, line: str) -> Tuple[str, str]:
+        m = re.fullmatch(r"step_physics\s*\(\s*(\w+)\s*,\s*(\w+)\s*\)", line)
+        if not m:
+            raise ValueError(f"Invalid step_physics statement: {line}")
+        target_name = m.group(1)
+        source_name = m.group(2)
+        self._require_object(target_name, "step_physics statement")
+        self._require_object(source_name, "step_physics statement")
+        return (source_name, target_name)
+
+    def _add_gravity_all_pairs(self) -> None:
+        names = list(self.objects.keys())
+        for i in range(len(names)):
+            for j in range(i + 1, len(names)):
+                pair_a = (names[i], names[j])
+                pair_b = (names[j], names[i])
+                if pair_a not in self.pull_pairs:
+                    self.pull_pairs.append(pair_a)
+                if pair_b not in self.pull_pairs:
+                    self.pull_pairs.append(pair_b)
+
+    def _parse_friction(self, line: str) -> None:
+        _, value_token = line.split(" ", 1)
+        value_token = value_token.strip()
+        try:
+            self.global_friction = float(value_token)
+        except ValueError as exc:
+            raise ValueError(f"Invalid friction value: {line}") from exc
+        if self.global_friction < 0:
+            raise ValueError("Friction must be non-negative")
+
+    def _parse_collisions(self, line: str) -> None:
+        _, value = line.split(" ", 1)
+        value = value.strip().lower()
+        if value == "on":
+            self.enable_collisions = True
+            return
+        if value == "off":
+            self.enable_collisions = False
+            return
+        raise ValueError(f"Invalid collisions setting: {line}")
+
+    def _parse_thrust(self, line: str) -> None:
+        m = re.fullmatch(r"thrust\s+(\w+)\s+by\s+(.+)", line)
+        if not m:
+            raise ValueError(f"Invalid thrust statement: {line}")
+        obj_name = m.group(1)
+        delta_v = self.parse_vector(m.group(2).strip())
+        body = self._require_object(obj_name, "thrust statement")
+        if body.fixed:
+            return
+        body.velocity = v_add(body.velocity, delta_v)
+
+    def _exec_monitor_energy(self) -> None:
+        self.output.append(f"system.energy={self._format_float(self._total_energy())}")
+
+    def _total_energy(self) -> float:
+        kinetic = 0.0
+        for body in self.objects.values():
+            speed = v_mag(body.velocity)
+            kinetic += 0.5 * body.mass * speed * speed
+
+        potential = 0.0
+        undirected_pairs: set[Tuple[str, str]] = set()
+        for source_name, target_name in self.pull_pairs:
+            if source_name == target_name:
+                continue
+            pair = tuple(sorted((source_name, target_name)))
+            undirected_pairs.add(pair)
+
+        for a_name, b_name in undirected_pairs:
+            a = self.objects[a_name]
+            b = self.objects[b_name]
+            r = max(v_mag(v_sub(a.position, b.position)), 1e-9)
+            potential -= G * a.mass * b.mass / r
+        return kinetic + potential
+
+    def _apply_friction(self, dt: float) -> None:
+        if self.global_friction <= 0:
+            return
+        damping = max(0.0, 1.0 - self.global_friction * dt)
+        for body in self.objects.values():
+            if body.fixed:
+                continue
+            body.velocity = v_scale(body.velocity, damping)
+
+    def _resolve_collisions(self) -> None:
+        if not self.enable_collisions:
+            return
+        names = list(self.objects.keys())
+        restitution = 1.0
+        for i in range(len(names)):
+            for j in range(i + 1, len(names)):
+                a = self.objects[names[i]]
+                b = self.objects[names[j]]
+                if a.radius <= 0 or b.radius <= 0:
+                    continue
+                delta = v_sub(b.position, a.position)
+                dist = v_mag(delta)
+                min_dist = a.radius + b.radius
+                if dist >= min_dist:
+                    continue
+
+                normal = v_norm(delta if dist > 1e-12 else (1.0, 0.0, 0.0))
+                overlap = min_dist - dist
+
+                if not a.fixed and not b.fixed:
+                    a.position = v_add(a.position, v_scale(normal, -overlap * 0.5))
+                    b.position = v_add(b.position, v_scale(normal, overlap * 0.5))
+                elif not a.fixed:
+                    a.position = v_add(a.position, v_scale(normal, -overlap))
+                elif not b.fixed:
+                    b.position = v_add(b.position, v_scale(normal, overlap))
+
+                rel_vel = v_sub(b.velocity, a.velocity)
+                vel_along_normal = v_dot(rel_vel, normal)
+                if vel_along_normal > 0:
+                    continue
+
+                inv_mass_a = 0.0 if a.fixed else 1.0 / a.mass
+                inv_mass_b = 0.0 if b.fixed else 1.0 / b.mass
+                denom = inv_mass_a + inv_mass_b
+                if denom <= 0:
+                    continue
+                impulse_mag = -(1.0 + restitution) * vel_along_normal / denom
+                impulse = v_scale(normal, impulse_mag)
+                if not a.fixed:
+                    a.velocity = v_sub(a.velocity, v_scale(impulse, inv_mass_a))
+                if not b.fixed:
+                    b.velocity = v_add(b.velocity, v_scale(impulse, inv_mass_b))
 
     def _run_loop(self, lines: List[str], start: int) -> int:
         header = lines[start]
@@ -333,6 +618,25 @@ class GravityInterpreter:
             raise ValueError("loop block missing closing brace")
 
         self._collect_inline_observers(block)
+        has_explicit_step = any(stmt.startswith("step_physics") for stmt in block)
+
+        step_index = 0
+        for _ in range(begin, end):
+            step_pairs = list(self.pull_pairs)
+            for stmt in block:
+                if stmt == "grav all":
+                    self._add_gravity_all_pairs()
+                    step_pairs = list(self.pull_pairs)
+                    continue
+                if stmt.startswith("friction "):
+                    self._parse_friction(stmt)
+                    continue
+                if stmt.startswith("collisions "):
+                    self._parse_collisions(stmt)
+                    continue
+                if stmt.startswith("thrust "):
+                    self._parse_thrust(stmt)
+                    continue
 
         step_index = 0
         for _ in range(begin, end):
@@ -345,6 +649,30 @@ class GravityInterpreter:
                     pair = (source_name, target_name)
                     if pair not in self.pull_pairs:
                         self.pull_pairs.append(pair)
+                    if pair not in step_pairs:
+                        step_pairs.append(pair)
+
+            if not has_explicit_step:
+                self.physics_backend.step(self.objects, step_pairs, dt, integrator)
+                self._apply_friction(dt)
+                self._resolve_collisions()
+
+            for stmt in block:
+                if stmt.startswith("step_physics"):
+                    pair = self._parse_step_physics(stmt)
+                    self.physics_backend.step(self.objects, [pair], dt, integrator)
+                    self._apply_friction(dt)
+                    self._resolve_collisions()
+                    continue
+                if stmt.endswith(".velocity") and "=" in stmt:
+                    self._parse_velocity_assignment(stmt)
+                    continue
+                if stmt.startswith("print "):
+                    self._exec_print(stmt)
+                    continue
+                if stmt == "monitor energy":
+                    self._exec_monitor_energy()
+
             self.physics_backend.step(self.objects, self.pull_pairs, dt, integrator)
             for stmt in block:
                 if stmt.startswith("print "):
@@ -403,6 +731,104 @@ class GravityInterpreter:
         raise ValueError(f"Unsupported print expression: {expr}")
 
 
+def run_script_file(script_path: str) -> List[str]:
+    script = Path(script_path).read_text(encoding="utf-8")
+    interpreter = GravityInterpreter()
+    return interpreter.execute(script)
+
+
+def check_script_file(script_path: str) -> None:
+    run_script_file(script_path)
+
+
+def build_executable(name: str, outdir: str, auto_install: bool = False, clean: bool = True) -> Path:
+    pyinstaller = shutil.which("pyinstaller")
+    if not pyinstaller and auto_install:
+        subprocess.run([sys.executable, "-m", "pip", "install", "pyinstaller"], check=True)
+        pyinstaller = shutil.which("pyinstaller")
+    if not pyinstaller:
+        raise RuntimeError(
+            "PyInstaller is not installed. Install it with: python -m pip install pyinstaller"
+        )
+
+    cmd = [
+        pyinstaller,
+        "--onefile",
+        "--name",
+        name,
+        "--distpath",
+        outdir,
+        "gravity_lang_interpreter.py",
+    ]
+    if clean:
+        cmd.insert(2, "--clean")
+    subprocess.run(cmd, check=True)
+    return Path(outdir) / (f"{name}.exe" if sys.platform.startswith("win") else name)
+
+
+def main() -> int:
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Gravity Lang CLI (v1.0)")
+    parser.add_argument("--version", action="version", version=f"Gravity Lang {GRAVITY_LANG_VERSION}")
+
+    sub = parser.add_subparsers(dest="command")
+
+    run_parser = sub.add_parser("run", help="Run a .gravity script")
+    run_parser.add_argument("run_file", help="Path to a .gravity script")
+
+    check_parser = sub.add_parser("check", help="Parse and validate a .gravity script")
+    check_parser.add_argument("check_file", help="Path to a .gravity script")
+
+    exe_parser = sub.add_parser("build-exe", help="Build a standalone v1.0 interpreter executable")
+    exe_parser.add_argument("--name", default="gravity-lang-v1.0", help="Executable name")
+    exe_parser.add_argument("--outdir", default="dist", help="Output directory")
+    exe_parser.add_argument(
+        "--install-pyinstaller",
+        action="store_true",
+        help="Automatically install pyinstaller if missing",
+    )
+    exe_parser.add_argument(
+        "--no-clean",
+        action="store_true",
+        help="Disable PyInstaller clean mode",
+    )
+
+    parser.add_argument("legacy_file", nargs="?", help="Backward-compatible: run a .gravity script directly")
+
+    args = parser.parse_args()
+
+    if args.command == "run":
+        output = run_script_file(args.run_file)
+        print("\n".join(output))
+        return 0
+
+    if args.command == "check":
+        check_script_file(args.check_file)
+        print(f"OK: {args.check_file}")
+        return 0
+
+    if args.command == "build-exe":
+        output_path = build_executable(
+            args.name,
+            args.outdir,
+            auto_install=args.install_pyinstaller,
+            clean=not args.no_clean,
+        )
+        print(f"Built executable: {output_path}")
+        return 0
+
+    if args.legacy_file:
+        output = run_script_file(args.legacy_file)
+        print("\n".join(output))
+        return 0
+
+    parser.print_help()
+    return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
 if __name__ == "__main__":
     import argparse
 
