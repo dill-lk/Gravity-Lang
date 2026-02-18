@@ -149,7 +149,7 @@ def calculate_orbital_elements(position: Vec3, velocity: Vec3, central_mass: flo
     
     # Eccentricity vector
     rv_cross = v_cross(velocity, h_vec)
-    e_vec = v_sub(v_scale(rv_cross, 1.0 / mu), v_scale(v_norm(position), 1.0))
+    e_vec = v_sub(v_scale(rv_cross, 1.0 / mu), v_norm(position))
     e = v_mag(e_vec)
     
     # Inclination
@@ -348,10 +348,6 @@ class PythonPhysicsBackend:
 
     def _step_verlet(self, objects: Dict[str, Body], pull_pairs: List[Tuple[str, str]], dt: float) -> None:
         """Velocity Verlet integrator - symplectic, time-reversible, 2nd order accurate."""
-        # Store previous accelerations if this is the first step
-        if not hasattr(self, '_prev_accelerations'):
-            self._prev_accelerations: Dict[str, Vec3] = {}
-        
         accelerations = self._accelerations(objects, pull_pairs)
         
         for name, body in objects.items():
