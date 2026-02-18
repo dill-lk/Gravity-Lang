@@ -37,7 +37,7 @@ simulate t in 0..28 step 3600[s] integrator verlet {
 
 ```bash
 # Clone the repository
-git clone https://github.com/YOUR_USERNAME/Gravity-Lang.git
+git clone https://github.com/dill-lk/Gravity-Lang.git
 cd Gravity-Lang
 
 # Run examples directly

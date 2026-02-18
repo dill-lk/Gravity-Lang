@@ -877,6 +877,14 @@ class GravityInterpreter:
         except ValueError as exc:
             raise ValueError(f"Invalid object declaration syntax: {line}") from exc
 
+        # Check for duplicate object names
+        if name.strip() in self.objects:
+            raise ValueError(
+                f"Error: Object '{name.strip()}' already exists.\n"
+                f"  Each object must have a unique name.\n"
+                f"  Line: {line}"
+            )
+
         try:
             position_token, trailing = self._split_leading_vector(rest)
         except ValueError as exc:
@@ -892,6 +900,14 @@ class GravityInterpreter:
         if not m_mass:
             raise ValueError(f"Object declaration missing mass: {line}")
         mass = self.parse_value(m_mass.group(1))
+        
+        # Validate positive mass
+        if mass <= 0:
+            raise ValueError(
+                f"Error: Mass must be positive, got {mass}\n"
+                f"  Physical objects cannot have zero or negative mass.\n"
+                f"  Line: {line}"
+            )
 
         radius = 1.0
         velocity: Vec3 = (0.0, 0.0, 0.0)
@@ -900,6 +916,12 @@ class GravityInterpreter:
         m_radius = re.search(r"radius\s+([^\s]+)", trailing)
         if m_radius:
             radius = self.parse_value(m_radius.group(1))
+            # Validate positive radius
+            if radius <= 0:
+                raise ValueError(
+                    f"Error: Radius must be positive, got {radius}\n"
+                    f"  Line: {line}"
+                )
 
         if "velocity" in trailing:
             vel_tail = trailing.split("velocity", 1)[1].strip()

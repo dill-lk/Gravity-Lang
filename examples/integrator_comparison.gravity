@@ -5,7 +5,7 @@ sphere Sun at [0,0,0] mass 1.989e30[kg] fixed
 sphere Comet at [150000000,0,0][km] mass 1e12[kg] velocity [0,30,0][km/s]
 
 # Using RK4 (4th order, most accurate but slower)
-orbit t in 0..10 step 86400[s] integrator rk4 {
+simulate t in 0..10 step 86400[s] integrator rk4 {
     Sun pull Comet
 }
 

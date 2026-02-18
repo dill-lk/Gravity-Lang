@@ -5,12 +5,21 @@
 # Create a central star
 sphere Sun at [0,0,0] radius 696000[km] mass 1.989e30[kg] fixed
 
-# Create 50 asteroids in orbit around the Sun
-sphere Asteroid1 at [150e6[km],0,0] mass 1e15[kg] velocity [0,30[km/s],0]
-sphere Asteroid2 at [155e6[km],0,0] mass 1e15[kg] velocity [0,29.5[km/s],0]
-sphere Asteroid3 at [160e6[km],0,0] mass 1e15[kg] velocity [0,29[km/s],0]
-sphere Asteroid4 at [165e6[km],0,0] mass 1e15[kg] velocity [0,28.5[km/s],0]
-sphere Asteroid5 at [170e6[km],0,0] mass 1e15[kg] velocity [0,28[km/s],0]
+# Create 5 asteroids in orbit around the Sun
+sphere Asteroid1 at [150e6,0,0][km] mass 1e15[kg]
+Asteroid1.velocity = [0,30,0][km/s]
+
+sphere Asteroid2 at [155e6,0,0][km] mass 1e15[kg]
+Asteroid2.velocity = [0,29.5,0][km/s]
+
+sphere Asteroid3 at [160e6,0,0][km] mass 1e15[kg]
+Asteroid3.velocity = [0,29,0][km/s]
+
+sphere Asteroid4 at [165e6,0,0][km] mass 1e15[kg]
+Asteroid4.velocity = [0,28.5,0][km/s]
+
+sphere Asteroid5 at [170e6,0,0][km] mass 1e15[kg]
+Asteroid5.velocity = [0,28,0][km/s]
 
 # Simulate with all objects gravitationally interacting
 simulate t in 0..100 step 3600[s] integrator verlet {
