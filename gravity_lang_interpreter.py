@@ -143,12 +143,6 @@ class PythonPhysicsBackend:
         for source_name, target_name in pull_pairs:
             source = objects[source_name]
             displacement = v_sub(positions[source_name], positions[target_name])
-    def _accelerations(self, objects: Dict[str, Body], pull_pairs: List[Tuple[str, str]]) -> Dict[str, Vec3]:
-        accelerations: Dict[str, Vec3] = {name: (0.0, 0.0, 0.0) for name in objects}
-        for source_name, target_name in pull_pairs:
-            source = objects[source_name]
-            target = objects[target_name]
-            displacement = v_sub(source.position, target.position)
             r = max(v_mag(displacement), 1e-9)
             acc_mag = G * source.mass / (r**2)
             acc = v_scale(v_norm(displacement), acc_mag)
@@ -230,9 +224,6 @@ class PythonPhysicsBackend:
             )
             objects[name].position = new_pos
             objects[name].velocity = new_vel
-        # Practical approximation: use two half leapfrog steps to keep implementation compact.
-        self._step_leapfrog(objects, pull_pairs, dt * 0.5)
-        self._step_leapfrog(objects, pull_pairs, dt * 0.5)
 
     def step(
         self,
@@ -262,8 +253,6 @@ class GravityInterpreter:
 
     def _format_float(self, value: float) -> str:
         return f"{value:.6e}"
-
-        self.physics_backend = physics_backend or PythonPhysicsBackend()
 
     def parse_value(self, token: str) -> float:
         token = token.strip()
@@ -300,10 +289,6 @@ class GravityInterpreter:
             return (float(parts[0]) * scale, float(parts[1]) * scale, float(parts[2]) * scale)
 
         return (self.parse_value(parts[0]), self.parse_value(parts[1]), self.parse_value(parts[2]))
-        m = re.fullmatch(r"\[\s*([^,]+)\s*,\s*([^,]+)\s*,\s*([^\]]+)\s*\]", token)
-        if not m:
-            raise ValueError(f"Invalid vector token: {token}")
-        return (self.parse_value(m.group(1)), self.parse_value(m.group(2)), self.parse_value(m.group(3)))
 
     def parse_quantity(self, token: str) -> Quantity:
         token = token.strip()
@@ -350,13 +335,11 @@ class GravityInterpreter:
         return self.objects[obj_name]
 
     def execute(self, source: str) -> List[str]:
-        cleaned_lines: List[str] = []
+        lines = []
         for raw_line in source.splitlines():
             line = raw_line.split("#", 1)[0].strip()
             if line:
-                cleaned_lines.append(line)
-        lines = cleaned_lines
-        lines = [ln.strip() for ln in source.splitlines() if ln.strip() and not ln.strip().startswith("#")]
+                lines.append(line)
         i = 0
         while i < len(lines):
             line = lines[i]
@@ -438,8 +421,6 @@ class GravityInterpreter:
                 vel_unit, _ = self._split_leading_vector(vel_remaining)
                 velocity_vector = f"{velocity_vector}{vel_unit}"
             velocity = self.parse_vector(velocity_vector)
-            velocity_token, _ = self._split_leading_vector(vel_tail)
-            velocity = self.parse_vector(velocity_token)
 
         self.objects[name.strip()] = Body(
             name=name.strip(),
@@ -623,6 +604,8 @@ class GravityInterpreter:
         step_index = 0
         for _ in range(begin, end):
             step_pairs = list(self.pull_pairs)
+            
+            # Process configuration statements
             for stmt in block:
                 if stmt == "grav all":
                     self._add_gravity_all_pairs()
@@ -637,10 +620,6 @@ class GravityInterpreter:
                 if stmt.startswith("thrust "):
                     self._parse_thrust(stmt)
                     continue
-
-        step_index = 0
-        for _ in range(begin, end):
-            for stmt in block:
                 if " pull " in stmt:
                     a, _, b = stmt.partition(" pull ")
                     source_name, target_name = a.strip(), b.strip()
@@ -652,11 +631,13 @@ class GravityInterpreter:
                     if pair not in step_pairs:
                         step_pairs.append(pair)
 
+            # Execute physics step
             if not has_explicit_step:
                 self.physics_backend.step(self.objects, step_pairs, dt, integrator)
                 self._apply_friction(dt)
                 self._resolve_collisions()
 
+            # Process step_physics and other statements
             for stmt in block:
                 if stmt.startswith("step_physics"):
                     pair = self._parse_step_physics(stmt)
@@ -672,11 +653,8 @@ class GravityInterpreter:
                     continue
                 if stmt == "monitor energy":
                     self._exec_monitor_energy()
+                    continue
 
-            self.physics_backend.step(self.objects, self.pull_pairs, dt, integrator)
-            for stmt in block:
-                if stmt.startswith("print "):
-                    self._exec_print(stmt)
             self._run_observers(step_index)
             step_index += 1
         return i + 1
