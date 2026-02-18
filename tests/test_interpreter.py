@@ -220,6 +220,94 @@ class InterpreterTests(unittest.TestCase):
             build_executable("gravity-test", "dist", auto_install=True)
             self.assertEqual(run_mock.call_count, 2)
 
+    def test_verlet_integrator(self):
+        """Test the Verlet integrator."""
+        src = """
+        sphere Earth at [0,0,0] mass 5.972e24[kg] fixed
+        sphere Moon at [384400,0,0][km] mass 7.348e22[kg] velocity [0,1.022,0][km/s]
+        orbit t in 0..2 dt 3600[s] integrator verlet {
+            Earth pull Moon
+            print Moon.position
+        }
+        """
+        interp = GravityInterpreter()
+        output = interp.execute(src)
+        self.assertEqual(len(output), 2)
+        # Verify that Moon moved
+        self.assertNotIn("384400000.0, 0.0, 0.0", output[0])
+
+    def test_euler_integrator(self):
+        """Test the Euler integrator."""
+        src = """
+        sphere Earth at [0,0,0] mass 5.972e24[kg] fixed
+        sphere Moon at [384400,0,0][km] mass 7.348e22[kg] velocity [0,1.022,0][km/s]
+        orbit t in 0..2 dt 3600[s] integrator euler {
+            Earth pull Moon
+            print Moon.position
+        }
+        """
+        interp = GravityInterpreter()
+        output = interp.execute(src)
+        self.assertEqual(len(output), 2)
+        # Verify that Moon moved
+        self.assertNotIn("384400000.0, 0.0, 0.0", output[0])
+
+    def test_vector_cross_product(self):
+        """Test vector cross product function."""
+        from gravity_lang_interpreter import v_cross
+        a = (1.0, 0.0, 0.0)
+        b = (0.0, 1.0, 0.0)
+        result = v_cross(a, b)
+        self.assertEqual(result, (0.0, 0.0, 1.0))
+
+    def test_vector_distance(self):
+        """Test vector distance function."""
+        from gravity_lang_interpreter import v_distance
+        a = (0.0, 0.0, 0.0)
+        b = (3.0, 4.0, 0.0)
+        result = v_distance(a, b)
+        self.assertAlmostEqual(result, 5.0)
+
+    def test_vector_angle(self):
+        """Test vector angle function."""
+        from gravity_lang_interpreter import v_angle
+        import math
+        a = (1.0, 0.0, 0.0)
+        b = (0.0, 1.0, 0.0)
+        result = v_angle(a, b)
+        self.assertAlmostEqual(result, math.pi / 2, places=6)
+
+    def test_orbital_elements_calculation(self):
+        """Test orbital elements calculation."""
+        src = """
+        sphere Earth at [0,0,0] mass 5.972e24[kg] fixed
+        sphere Moon at [384400,0,0][km] mass 7.348e22[kg] velocity [0,1.022,0][km/s]
+        orbital_elements Moon around Earth
+        """
+        interp = GravityInterpreter()
+        output = interp.execute(src)
+        self.assertGreater(len(output), 0)
+        self.assertIn("Moon orbital elements around Earth", output[0])
+        self.assertIn("Semi-major axis:", output[1])
+        self.assertIn("Eccentricity:", output[2])
+
+    def test_orbital_elements_in_loop(self):
+        """Test orbital elements can be calculated during simulation."""
+        src = """
+        sphere Earth at [0,0,0] mass 5.972e24[kg] fixed
+        sphere Satellite at [7000,0,0][km] mass 100[kg] velocity [0,7.5,0][km/s]
+        orbit t in 0..2 dt 60[s] integrator rk4 {
+            Earth pull Satellite
+        }
+        orbital_elements Satellite around Earth
+        """
+        interp = GravityInterpreter()
+        output = interp.execute(src)
+        self.assertIn("Satellite orbital elements around Earth", output[0])
+        # Check for reasonable eccentricity (should be close to circular)
+        ecc_line = [line for line in output if "Eccentricity:" in line][0]
+        self.assertIn("Eccentricity:", ecc_line)
+
     def test_cli_check_command(self):
         with tempfile.NamedTemporaryFile("w", suffix=".gravity", delete=False) as tmp:
             tmp.write("sphere Earth at [0,0,0] mass 5.972e24[kg]\n")

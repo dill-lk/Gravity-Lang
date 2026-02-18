@@ -43,7 +43,7 @@ BASE_DIMS = {
 }
 
 Vec3 = Tuple[float, float, float]
-Integrator = Literal["leapfrog", "rk4"]
+Integrator = Literal["leapfrog", "rk4", "verlet", "euler"]
 
 
 def v_add(a: Vec3, b: Vec3) -> Vec3:
@@ -66,11 +66,132 @@ def v_dot(a: Vec3, b: Vec3) -> float:
     return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 
 
+def v_cross(a: Vec3, b: Vec3) -> Vec3:
+    """Cross product of two 3D vectors."""
+    return (
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    )
+
+
 def v_norm(v: Vec3) -> Vec3:
     m = v_mag(v)
     if m <= 1e-12:
         return (0.0, 0.0, 0.0)
     return (v[0] / m, v[1] / m, v[2] / m)
+
+
+def v_distance(a: Vec3, b: Vec3) -> float:
+    """Calculate distance between two points."""
+    return v_mag(v_sub(a, b))
+
+
+def v_angle(a: Vec3, b: Vec3) -> float:
+    """Calculate angle between two vectors in radians."""
+    mag_a = v_mag(a)
+    mag_b = v_mag(b)
+    if mag_a <= 1e-12 or mag_b <= 1e-12:
+        return 0.0
+    cos_angle = v_dot(a, b) / (mag_a * mag_b)
+    # Clamp to avoid numerical errors
+    cos_angle = max(-1.0, min(1.0, cos_angle))
+    return math.acos(cos_angle)
+
+
+@dataclass(frozen=True)
+class OrbitalElements:
+    """Orbital elements for a two-body system."""
+    semi_major_axis: float  # meters
+    eccentricity: float  # dimensionless
+    inclination: float  # radians
+    longitude_ascending_node: float  # radians (Ω)
+    argument_periapsis: float  # radians (ω)
+    true_anomaly: float  # radians (ν)
+    
+    @property
+    def periapsis(self) -> float:
+        """Distance at closest approach (meters)."""
+        return self.semi_major_axis * (1 - self.eccentricity)
+    
+    @property
+    def apoapsis(self) -> float:
+        """Distance at farthest point (meters)."""
+        return self.semi_major_axis * (1 + self.eccentricity)
+
+
+def calculate_orbital_elements(position: Vec3, velocity: Vec3, central_mass: float) -> OrbitalElements:
+    """
+    Calculate Keplerian orbital elements from state vectors.
+    
+    Args:
+        position: Position vector relative to central body (m)
+        velocity: Velocity vector (m/s)
+        central_mass: Mass of central body (kg)
+    
+    Returns:
+        OrbitalElements for the orbit
+    """
+    mu = G * central_mass  # Standard gravitational parameter
+    
+    r = v_mag(position)
+    v = v_mag(velocity)
+    
+    # Specific orbital energy
+    epsilon = v * v / 2 - mu / r
+    
+    # Semi-major axis (negative for hyperbolic orbits)
+    a = -mu / (2 * epsilon) if abs(epsilon) > 1e-12 else float('inf')
+    
+    # Angular momentum vector
+    h_vec = v_cross(position, velocity)
+    h = v_mag(h_vec)
+    
+    # Eccentricity vector
+    rv_cross = v_cross(velocity, h_vec)
+    e_vec = v_sub(v_scale(rv_cross, 1.0 / mu), v_scale(v_norm(position), 1.0))
+    e = v_mag(e_vec)
+    
+    # Inclination
+    i = math.acos(max(-1.0, min(1.0, h_vec[2] / h))) if h > 1e-12 else 0.0
+    
+    # Node vector (points to ascending node)
+    k_vec = (0.0, 0.0, 1.0)
+    n_vec = v_cross(k_vec, h_vec)
+    n = v_mag(n_vec)
+    
+    # Longitude of ascending node
+    if n > 1e-12:
+        omega_lan = math.acos(max(-1.0, min(1.0, n_vec[0] / n)))
+        if n_vec[1] < 0:
+            omega_lan = 2 * math.pi - omega_lan
+    else:
+        omega_lan = 0.0
+    
+    # Argument of periapsis
+    if n > 1e-12 and e > 1e-12:
+        omega = math.acos(max(-1.0, min(1.0, v_dot(n_vec, e_vec) / (n * e))))
+        if e_vec[2] < 0:
+            omega = 2 * math.pi - omega
+    else:
+        omega = 0.0
+    
+    # True anomaly
+    if e > 1e-12:
+        nu = math.acos(max(-1.0, min(1.0, v_dot(e_vec, position) / (e * r))))
+        if v_dot(position, velocity) < 0:
+            nu = 2 * math.pi - nu
+    else:
+        nu = 0.0
+    
+    return OrbitalElements(
+        semi_major_axis=a,
+        eccentricity=e,
+        inclination=i,
+        longitude_ascending_node=omega_lan,
+        argument_periapsis=omega,
+        true_anomaly=nu,
+    )
 
 
 @dataclass(frozen=True)
@@ -225,6 +346,57 @@ class PythonPhysicsBackend:
             objects[name].position = new_pos
             objects[name].velocity = new_vel
 
+    def _step_verlet(self, objects: Dict[str, Body], pull_pairs: List[Tuple[str, str]], dt: float) -> None:
+        """Velocity Verlet integrator - symplectic, time-reversible, 2nd order accurate."""
+        # Store previous accelerations if this is the first step
+        if not hasattr(self, '_prev_accelerations'):
+            self._prev_accelerations: Dict[str, Vec3] = {}
+        
+        accelerations = self._accelerations(objects, pull_pairs)
+        
+        for name, body in objects.items():
+            if body.fixed:
+                continue
+            
+            # Update position: x(t+dt) = x(t) + v(t)*dt + 0.5*a(t)*dt^2
+            body.position = v_add(
+                body.position,
+                v_add(
+                    v_scale(body.velocity, dt),
+                    v_scale(accelerations[name], 0.5 * dt * dt)
+                )
+            )
+        
+        # Calculate new accelerations at new positions
+        new_accelerations = self._accelerations(objects, pull_pairs)
+        
+        for name, body in objects.items():
+            if body.fixed:
+                continue
+            
+            # Update velocity: v(t+dt) = v(t) + 0.5*(a(t) + a(t+dt))*dt
+            body.velocity = v_add(
+                body.velocity,
+                v_scale(
+                    v_add(accelerations[name], new_accelerations[name]),
+                    0.5 * dt
+                )
+            )
+
+    def _step_euler(self, objects: Dict[str, Body], pull_pairs: List[Tuple[str, str]], dt: float) -> None:
+        """Simple Euler integrator - 1st order, less accurate but fast."""
+        accelerations = self._accelerations(objects, pull_pairs)
+        
+        for name, body in objects.items():
+            if body.fixed:
+                continue
+            
+            # Update velocity: v(t+dt) = v(t) + a(t)*dt
+            body.velocity = v_add(body.velocity, v_scale(accelerations[name], dt))
+            
+            # Update position: x(t+dt) = x(t) + v(t+dt)*dt
+            body.position = v_add(body.position, v_scale(body.velocity, dt))
+
     def step(
         self,
         objects: Dict[str, Body],
@@ -237,6 +409,12 @@ class PythonPhysicsBackend:
             return
         if integrator == "rk4":
             self._step_rk4(objects, pull_pairs, dt)
+            return
+        if integrator == "verlet":
+            self._step_verlet(objects, pull_pairs, dt)
+            return
+        if integrator == "euler":
+            self._step_euler(objects, pull_pairs, dt)
             return
         raise ValueError(f"Unsupported integrator: {integrator}")
 
@@ -378,6 +556,9 @@ class GravityInterpreter:
                 i += 1
             elif line.startswith("observe "):
                 self._parse_observe(line)
+                i += 1
+            elif line.startswith("orbital_elements "):
+                self._exec_orbital_elements(line)
                 i += 1
             else:
                 raise ValueError(f"Unsupported statement: {line}")
@@ -574,11 +755,11 @@ class GravityInterpreter:
     def _run_loop(self, lines: List[str], start: int) -> int:
         header = lines[start]
         m_orbit = re.fullmatch(
-            r"orbit\s+\w+\s+in\s+(\d+)\.\.(\d+)\s+dt\s+([^\s]+)(?:\s+integrator\s+(leapfrog|rk4))?\s*\{",
+            r"orbit\s+\w+\s+in\s+(\d+)\.\.(\d+)\s+dt\s+([^\s]+)(?:\s+integrator\s+(leapfrog|rk4|verlet|euler))?\s*\{",
             header,
         )
         m_sim = re.fullmatch(
-            r"simulate\s+\w+\s+in\s+(\d+)\.\.(\d+)\s+step\s+([^\s]+)(?:\s+integrator\s+(leapfrog|rk4))?\s*\{",
+            r"simulate\s+\w+\s+in\s+(\d+)\.\.(\d+)\s+step\s+([^\s]+)(?:\s+integrator\s+(leapfrog|rk4|verlet|euler))?\s*\{",
             header,
         )
         match = m_orbit or m_sim
@@ -693,6 +874,37 @@ class GravityInterpreter:
             with Path(observer.file_path).open("a", newline="", encoding="utf-8") as f:
                 writer = csv.writer(f)
                 writer.writerow([step_index, vec[0], vec[1], vec[2]])
+
+    def _exec_orbital_elements(self, line: str) -> None:
+        """Calculate and print orbital elements for object orbiting central body."""
+        # Format: orbital_elements Object around CentralBody
+        m = re.fullmatch(r"orbital_elements\s+(\w+)\s+around\s+(\w+)", line)
+        if not m:
+            raise ValueError(f"Invalid orbital_elements statement: {line}. Use: orbital_elements Object around CentralBody")
+        
+        obj_name = m.group(1)
+        central_name = m.group(2)
+        
+        obj = self._require_object(obj_name, "orbital_elements statement")
+        central = self._require_object(central_name, "orbital_elements statement")
+        
+        # Calculate relative position and velocity
+        rel_pos = v_sub(obj.position, central.position)
+        rel_vel = v_sub(obj.velocity, central.velocity)
+        
+        # Calculate orbital elements
+        elements = calculate_orbital_elements(rel_pos, rel_vel, central.mass)
+        
+        # Format output
+        output_lines = [
+            f"{obj_name} orbital elements around {central_name}:",
+            f"  Semi-major axis: {elements.semi_major_axis/1000:.2f} km",
+            f"  Eccentricity: {elements.eccentricity:.6f}",
+            f"  Inclination: {math.degrees(elements.inclination):.2f}°",
+            f"  Periapsis: {elements.periapsis/1000:.2f} km",
+            f"  Apoapsis: {elements.apoapsis/1000:.2f} km",
+        ]
+        self.output.extend(output_lines)
 
     def _exec_print(self, line: str) -> None:
         expr = line.replace("print", "", 1).strip()
