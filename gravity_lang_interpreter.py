@@ -276,7 +276,15 @@ class Visualizer3D:
     BASE_SPHERE_SIZE = 50
     SIZE_SCALE_FACTOR = 20
     
-    def __init__(self, title: str = "Gravity Simulation", output_file: str = "gravity_simulation_3d.png"):
+    def __init__(self, title: str = "Gravity Simulation", output_file: str = "gravity_simulation_3d.png", 
+                 update_interval: int = 1):
+        """Initialize 3D visualizer.
+        
+        Args:
+            title: Title for the visualization window
+            output_file: Filename to save the final visualization
+            update_interval: Render every N simulation steps (default: 1)
+        """
         if not HAS_MATPLOTLIB:
             raise RuntimeError(
                 "matplotlib is required for 3D visualization. "
@@ -288,7 +296,7 @@ class Visualizer3D:
         self.ax = None
         self.trajectories: Dict[str, List[Vec3]] = {}
         self.colors: Dict[str, str] = {}
-        self.update_interval = 1  # Update every N steps
+        self.update_interval = update_interval
         self.step_count = 0
         
     def initialize(self, objects: Dict[str, Body]) -> None:
@@ -874,7 +882,8 @@ class NumPyPhysicsBackend:
 
 
 class GravityInterpreter:
-    def __init__(self, physics_backend: PhysicsBackend | None = None, enable_3d_viz: bool = False) -> None:
+    def __init__(self, physics_backend: PhysicsBackend | None = None, enable_3d_viz: bool = False, 
+                 viz_interval: int = 1) -> None:
         self.objects: Dict[str, Body] = {}
         self.pull_pairs: set[Tuple[str, str]] = set()  # Using set for O(1) membership checks
         self.output: List[str] = []
@@ -885,7 +894,8 @@ class GravityInterpreter:
         self.visualizer: Visualizer3D | None = None
         self.enable_3d_viz = enable_3d_viz
         if enable_3d_viz:
-            self.visualizer = Visualizer3D("Gravity-Lang 3D Simulation")
+            self.visualizer = Visualizer3D("Gravity-Lang 3D Simulation", 
+                                          update_interval=viz_interval)
 
     def _format_float(self, value: float) -> str:
         return f"{value:.6e}"
@@ -1087,6 +1097,9 @@ class GravityInterpreter:
             velocity = self.parse_vector(velocity_vector)
 
         # Parse optional color attribute
+        # Note: Color validation is deferred to matplotlib when rendering.
+        # Accepts matplotlib color names ('blue', 'red', etc.) or hex codes ('#0000FF').
+        # Invalid colors will cause matplotlib to raise an error during visualization.
         color = ""
         m_color = re.search(r'color\s+"([^"]+)"', trailing)
         if m_color:
@@ -1433,9 +1446,7 @@ class GravityInterpreter:
 
 def run_script_file(script_path: str, enable_3d: bool = False, viz_interval: int = 1) -> List[str]:
     script = Path(script_path).read_text(encoding="utf-8")
-    interpreter = GravityInterpreter(enable_3d_viz=enable_3d)
-    if enable_3d and interpreter.visualizer:
-        interpreter.visualizer.update_interval = viz_interval
+    interpreter = GravityInterpreter(enable_3d_viz=enable_3d, viz_interval=viz_interval)
     output = interpreter.execute(script)
     if enable_3d and interpreter.visualizer:
         interpreter.visualizer.show()  # Keep window open at end
