@@ -1,63 +1,51 @@
 # Gravity-Lang
 
-A first prototype of **Gravity Lang**, a physics-first language where objects live in 3D space and evolve over simulation timesteps.
+A scientific prototype of **Gravity 3D / Gravity Lang** for physics-driven simulation scripting.
 
-## Updated Blueprint Direction (Hybrid Multi-language)
+## Hybrid Architecture Direction
 
-| Language | Role in Gravity Lang |
+| Language | Role |
 |---|---|
-| C++ | Core physics engine, heavy math, collision detection |
-| Rust | Memory-safe parallel computations and optional physics modules |
-| Go | Networking, cloud simulations, distributed orchestration |
-| C# | GUI/editor, 3D visualization tooling |
-| Python | Frontend scripting/parsing layer for fast iteration |
+| Python | Frontend language parser + orchestration layer |
+| C++ | Core physics kernel (heavy math, collisions) |
+| Rust | Memory-safe parallel compute modules |
+| Go | Distributed/cloud simulation API |
+| C# | GUI/editor and 3D visualization tooling |
 
-### Architecture sketch
+The current repository focuses on the Python prototype, but the runtime is now shaped around a physics backend seam for migration toward C++/Rust kernels.
 
-```text
-+------------------+       +----------------+       +----------------+
-|  Python Frontend  | <---> |   C++ Physics  | <---> |  Rust Engine   |
-|  (Gravity Script) |       |   Engine Core  |       | Parallel Tasks |
-+------------------+       +----------------+       +----------------+
-          |
-          v
-       +-------+
-       | Go API |
-       | Server |
-       +-------+
-          |
-          v
-       +-------+
-       | C# GUI |
-       | Editor |
-       +-------+
-```
+## Implemented v2 Scientific Concepts
 
-This repository currently implements the **Python Frontend prototype**, with a backend interface seam that can be replaced by C++/Rust FFI.
+- **Physics kernel integrators**: loop-level `integrator leapfrog|rk4` selection (default: `leapfrog`).
+- **Scientific loop syntax**: supports both `orbit ... dt ... {}` and `simulate ... step ... {}`.
+- **Observer pattern**: `observe Object.position|velocity to "file.csv" frequency N` streams step data to CSV.
+- **Dimensional quantities**: `Quantity` operations support unit-aware dimensional consistency checks for algebraic expressions.
+- **Extended primitives**: `sphere`, `cube`, `pointmass`, `probe`; optional `fixed` and `velocity` properties.
 
-## Implemented now (Python prototype)
-
-- Object declarations for `sphere` and `cube`
-- Unit-aware numeric parsing (`[km]`, `[m]`, `[kg]`, `[s]`)
-- One-way gravitational relation via `A pull B`
-- Discrete simulation loops with `orbit ... dt ... { ... }`
-- Printing `Object.position`
-- A pluggable `PhysicsBackend` protocol + `PythonPhysicsBackend` reference implementation
-
-## Example script
+## Example (Scientific Loop)
 
 ```gravity
-sphere Earth at [0,0,0] radius 6371[km] mass 5.972e24[kg]
-sphere Moon at [384400[km],0,0] radius 1737[km] mass 7.348e22[kg]
+sphere Earth at [0,0,0] mass 5.972e24[kg] fixed
+sphere Moon at [384400[km],0,0] mass 7.348e22[kg] velocity [0,1[km],0]
 
-Earth pull Moon
-
-orbit t in 0..24 dt 3600[s] {
+simulate t in 0..24 step 3600[s] integrator leapfrog {
+    Earth pull Moon
     print Moon.position
+    observe Moon.position to "artifacts/moon.csv" frequency 1
 }
 ```
 
-See: `examples/earth_moon.gravity`.
+## Dimensional Quantity Example (Python API)
+
+```python
+interp = GravityInterpreter()
+G = interp.parse_quantity("6.67430e-11[m^3 kg^-1 s^-2]")
+M = interp.parse_quantity("5.972e24[kg]")
+R = interp.parse_quantity("6371[km]")
+acceleration = G.mul(M).div(R.pow(2))
+```
+
+`acceleration` yields dimensions `{L: 1, T: -2}` (m/s² equivalent).
 
 ## Run
 
@@ -65,16 +53,16 @@ See: `examples/earth_moon.gravity`.
 python gravity_lang_interpreter.py examples/earth_moon.gravity
 ```
 
-## Test
+## Tests
 
 ```bash
 python -m unittest discover -s tests -v
 ```
 
-## Next steps
+## Next Steps
 
-1. Add C++ physics backend and Python bindings (pybind11/cffi).
-2. Add Rust worker module for parallel particle/field updates.
-3. Add Go simulation API for remote execution and orchestration.
-4. Add C# editor/viewport with object inspector and timeline controls.
-5. Extend language syntax (collisions, rotations, constraints, material models).
+1. Replace `PythonPhysicsBackend` with a real C++ kernel (pybind11) and true RK4 implementation.
+2. Add Rust worker backend for parallel large-N body updates.
+3. Add Go simulation control plane for remote orchestration.
+4. Add C# editor/renderer with camera/lights/inspector.
+5. Add Parquet/Arrow observers and plotting hooks (energy drift, phase diagrams).
