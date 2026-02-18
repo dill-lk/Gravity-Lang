@@ -18,6 +18,15 @@ except ImportError:
     np = None  # type: ignore
     HAS_NUMPY = False
 
+# Optional matplotlib support for 3D visualization
+try:
+    import matplotlib.pyplot as plt
+    from mpl_toolkits.mplot3d import Axes3D
+    HAS_MATPLOTLIB = True
+except ImportError:
+    plt = None  # type: ignore
+    HAS_MATPLOTLIB = False
+
 G = 6.67430e-11
 GRAVITY_LANG_VERSION = "1.0.0"
 
@@ -239,6 +248,7 @@ class Body:
     mass: float = 1.0
     radius: float = 1.0
     fixed: bool = False
+    color: str = ""  # Optional color for visualization
     properties: Dict[str, float] = field(default_factory=dict)
 
 
@@ -248,6 +258,122 @@ class Observer:
     field_name: str
     file_path: str
     frequency: int
+
+
+class Visualizer3D:
+    """3D visualization for gravitational simulations using matplotlib."""
+    
+    def __init__(self, title: str = "Gravity Simulation"):
+        if not HAS_MATPLOTLIB:
+            raise RuntimeError(
+                "matplotlib is required for 3D visualization. "
+                "Install it with: pip install matplotlib"
+            )
+        self.title = title
+        self.fig = None
+        self.ax = None
+        self.trajectories: Dict[str, List[Vec3]] = {}
+        self.colors: Dict[str, str] = {}
+        self.update_interval = 1  # Update every N steps
+        self.step_count = 0
+        
+    def initialize(self, objects: Dict[str, Body]) -> None:
+        """Initialize the 3D plot."""
+        self.fig = plt.figure(figsize=(10, 8))
+        self.ax = self.fig.add_subplot(111, projection='3d')
+        self.ax.set_xlabel('X (m)')
+        self.ax.set_ylabel('Y (m)')
+        self.ax.set_zlabel('Z (m)')
+        self.ax.set_title(self.title)
+        
+        # Initialize trajectory storage
+        for name, obj in objects.items():
+            self.trajectories[name] = [obj.position]
+            # Use object color if available, otherwise default colors
+            if hasattr(obj, 'color') and obj.color:
+                self.colors[name] = obj.color
+            else:
+                # Default color palette
+                default_colors = ['blue', 'red', 'green', 'orange', 'purple', 'cyan', 'magenta', 'yellow']
+                self.colors[name] = default_colors[len(self.colors) % len(default_colors)]
+    
+    def update(self, objects: Dict[str, Body]) -> None:
+        """Update trajectories with current positions."""
+        self.step_count += 1
+        for name, obj in objects.items():
+            if name not in self.trajectories:
+                self.trajectories[name] = []
+                self.colors[name] = 'gray'
+            self.trajectories[name].append(obj.position)
+    
+    def render(self, objects: Dict[str, Body], show_trajectories: bool = True, 
+               max_trail_length: int = 1000) -> None:
+        """Render the current state of the simulation."""
+        if self.ax is None:
+            self.initialize(objects)
+        
+        self.ax.clear()
+        self.ax.set_xlabel('X (m)')
+        self.ax.set_ylabel('Y (m)')
+        self.ax.set_zlabel('Z (m)')
+        self.ax.set_title(self.title)
+        
+        # Plot trajectories
+        if show_trajectories:
+            for name, trajectory in self.trajectories.items():
+                if len(trajectory) > 1:
+                    # Limit trajectory length for performance
+                    recent_traj = trajectory[-max_trail_length:]
+                    xs = [p[0] for p in recent_traj]
+                    ys = [p[1] for p in recent_traj]
+                    zs = [p[2] for p in recent_traj]
+                    self.ax.plot(xs, ys, zs, color=self.colors.get(name, 'gray'), 
+                               alpha=0.5, linewidth=1, label=f"{name} trail")
+        
+        # Plot current positions as spheres
+        for name, obj in objects.items():
+            x, y, z = obj.position
+            color = self.colors.get(name, 'gray')
+            # Size based on mass (logarithmic scale for better visibility)
+            size = max(20, min(200, 50 + 20 * math.log10(obj.mass + 1)))
+            self.ax.scatter([x], [y], [z], color=color, s=size, 
+                          marker='o', edgecolors='black', linewidth=0.5, label=name)
+        
+        # Auto-scale axes to fit all objects
+        all_positions = [obj.position for obj in objects.values()]
+        if all_positions:
+            xs = [p[0] for p in all_positions]
+            ys = [p[1] for p in all_positions]
+            zs = [p[2] for p in all_positions]
+            
+            # Add some padding
+            x_range = max(xs) - min(xs) if len(xs) > 1 else 1e6
+            y_range = max(ys) - min(ys) if len(ys) > 1 else 1e6
+            z_range = max(zs) - min(zs) if len(zs) > 1 else 1e6
+            max_range = max(x_range, y_range, z_range) * 1.2
+            
+            mid_x = (max(xs) + min(xs)) / 2
+            mid_y = (max(ys) + min(ys)) / 2
+            mid_z = (max(zs) + min(zs)) / 2
+            
+            self.ax.set_xlim(mid_x - max_range/2, mid_x + max_range/2)
+            self.ax.set_ylim(mid_y - max_range/2, mid_y + max_range/2)
+            self.ax.set_zlim(mid_z - max_range/2, mid_z + max_range/2)
+        
+        self.ax.legend(loc='upper right', fontsize='small')
+        plt.draw()
+        plt.pause(0.001)
+    
+    def show(self) -> None:
+        """Display the final plot."""
+        if self.fig:
+            plt.show()
+    
+    def save(self, filename: str) -> None:
+        """Save the current plot to a file."""
+        if self.fig:
+            plt.savefig(filename, dpi=150, bbox_inches='tight')
+            print(f"Saved visualization to {filename}")
 
 
 class GravityLaw(Protocol):
@@ -726,7 +852,7 @@ class NumPyPhysicsBackend:
 
 
 class GravityInterpreter:
-    def __init__(self, physics_backend: PhysicsBackend | None = None) -> None:
+    def __init__(self, physics_backend: PhysicsBackend | None = None, enable_3d_viz: bool = False) -> None:
         self.objects: Dict[str, Body] = {}
         self.pull_pairs: set[Tuple[str, str]] = set()  # Using set for O(1) membership checks
         self.output: List[str] = []
@@ -734,6 +860,10 @@ class GravityInterpreter:
         self.global_friction = 0.0
         self.enable_collisions = True
         self.physics_backend = physics_backend or PythonPhysicsBackend()
+        self.visualizer: Visualizer3D | None = None
+        self.enable_3d_viz = enable_3d_viz
+        if enable_3d_viz:
+            self.visualizer = Visualizer3D("Gravity-Lang 3D Simulation")
 
     def _format_float(self, value: float) -> str:
         return f"{value:.6e}"
@@ -934,6 +1064,12 @@ class GravityInterpreter:
                 velocity_vector = f"{velocity_vector}{vel_unit}"
             velocity = self.parse_vector(velocity_vector)
 
+        # Parse optional color attribute
+        color = ""
+        m_color = re.search(r'color\s+"([^"]+)"', trailing)
+        if m_color:
+            color = m_color.group(1)
+
         self.objects[name.strip()] = Body(
             name=name.strip(),
             shape=shape,
@@ -942,6 +1078,7 @@ class GravityInterpreter:
             radius=radius,
             mass=mass,
             fixed=fixed,
+            color=color,
         )
 
     def _parse_velocity_assignment(self, line: str) -> None:
@@ -1172,7 +1309,23 @@ class GravityInterpreter:
                     continue
 
             self._run_observers(step_index)
+            
+            # Update 3D visualization if enabled
+            if self.visualizer:
+                if step_index == 0:
+                    self.visualizer.initialize(self.objects)
+                self.visualizer.update(self.objects)
+                # Render every N steps to avoid slowdown
+                if step_index % self.visualizer.update_interval == 0:
+                    self.visualizer.render(self.objects)
+            
             step_index += 1
+        
+        # Show final visualization if enabled
+        if self.visualizer:
+            self.visualizer.render(self.objects)
+            self.visualizer.save("gravity_simulation_3d.png")
+        
         return i + 1
 
     def _collect_inline_observers(self, block: List[str]) -> None:
@@ -1256,10 +1409,15 @@ class GravityInterpreter:
         raise ValueError(f"Unsupported print expression: {expr}")
 
 
-def run_script_file(script_path: str) -> List[str]:
+def run_script_file(script_path: str, enable_3d: bool = False, viz_interval: int = 1) -> List[str]:
     script = Path(script_path).read_text(encoding="utf-8")
-    interpreter = GravityInterpreter()
-    return interpreter.execute(script)
+    interpreter = GravityInterpreter(enable_3d_viz=enable_3d)
+    if enable_3d and interpreter.visualizer:
+        interpreter.visualizer.update_interval = viz_interval
+    output = interpreter.execute(script)
+    if enable_3d and interpreter.visualizer:
+        interpreter.visualizer.show()  # Keep window open at end
+    return output
 
 
 def check_script_file(script_path: str) -> None:
@@ -1301,6 +1459,10 @@ def main() -> int:
 
     run_parser = sub.add_parser("run", help="Run a .gravity script")
     run_parser.add_argument("run_file", help="Path to a .gravity script")
+    run_parser.add_argument("--3d", dest="enable_3d", action="store_true", 
+                           help="Enable 3D visualization (requires matplotlib)")
+    run_parser.add_argument("--viz-interval", type=int, default=1, 
+                           help="Visualization update interval (render every N steps)")
 
     check_parser = sub.add_parser("check", help="Parse and validate a .gravity script")
     check_parser.add_argument("check_file", help="Path to a .gravity script")
@@ -1324,7 +1486,8 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.command == "run":
-        output = run_script_file(args.run_file)
+        output = run_script_file(args.run_file, enable_3d=args.enable_3d, 
+                                viz_interval=args.viz_interval)
         print("\n".join(output))
         return 0
 
