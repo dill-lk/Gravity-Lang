@@ -1,0 +1,19 @@
+# NumPy Performance Demo - Large N-body system
+# This example demonstrates the performance benefits of NumPy backend
+# when simulating many objects
+
+# Create a central star
+sphere Sun at [0,0,0] radius 696000[km] mass 1.989e30[kg] fixed
+
+# Create 50 asteroids in orbit around the Sun
+sphere Asteroid1 at [150e6[km],0,0] mass 1e15[kg] velocity [0,30[km/s],0]
+sphere Asteroid2 at [155e6[km],0,0] mass 1e15[kg] velocity [0,29.5[km/s],0]
+sphere Asteroid3 at [160e6[km],0,0] mass 1e15[kg] velocity [0,29[km/s],0]
+sphere Asteroid4 at [165e6[km],0,0] mass 1e15[kg] velocity [0,28.5[km/s],0]
+sphere Asteroid5 at [170e6[km],0,0] mass 1e15[kg] velocity [0,28[km/s],0]
+
+# Simulate with all objects gravitationally interacting
+simulate t in 0..100 step 3600[s] integrator verlet {
+    grav all
+    print Sun.position
+}

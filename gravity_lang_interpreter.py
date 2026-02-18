@@ -728,7 +728,7 @@ class NumPyPhysicsBackend:
 class GravityInterpreter:
     def __init__(self, physics_backend: PhysicsBackend | None = None) -> None:
         self.objects: Dict[str, Body] = {}
-        self.pull_pairs: List[Tuple[str, str]] = []
+        self.pull_pairs: set[Tuple[str, str]] = set()  # Using set for O(1) membership checks
         self.output: List[str] = []
         self.observers: List[Observer] = []
         self.global_friction = 0.0
@@ -850,7 +850,7 @@ class GravityInterpreter:
                 source_name, target_name = a.strip(), b.strip()
                 self._require_object(source_name, "pull statement")
                 self._require_object(target_name, "pull statement")
-                self.pull_pairs.append((source_name, target_name))
+                self.pull_pairs.add((source_name, target_name))
                 i += 1
             elif line.startswith(("orbit ", "simulate ")):
                 i = self._run_loop(lines, i)
@@ -943,10 +943,8 @@ class GravityInterpreter:
             for j in range(i + 1, len(names)):
                 pair_a = (names[i], names[j])
                 pair_b = (names[j], names[i])
-                if pair_a not in self.pull_pairs:
-                    self.pull_pairs.append(pair_a)
-                if pair_b not in self.pull_pairs:
-                    self.pull_pairs.append(pair_b)
+                self.pull_pairs.add(pair_a)
+                self.pull_pairs.add(pair_b)
 
     def _parse_friction(self, line: str) -> None:
         _, value_token = line.split(" ", 1)
@@ -1113,8 +1111,7 @@ class GravityInterpreter:
                     self._require_object(source_name, "pull statement")
                     self._require_object(target_name, "pull statement")
                     pair = (source_name, target_name)
-                    if pair not in self.pull_pairs:
-                        self.pull_pairs.append(pair)
+                    self.pull_pairs.add(pair)
                     if pair not in step_pairs:
                         step_pairs.append(pair)
 
@@ -1325,14 +1322,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-if __name__ == "__main__":
-    import argparse
-
-    parser = argparse.ArgumentParser(description="Gravity Lang prototype interpreter")
-    parser.add_argument("file", help="Path to a .gravity script")
-    args = parser.parse_args()
-
-    script = Path(args.file).read_text(encoding="utf-8")
-    interpreter = GravityInterpreter()
-    out = interpreter.execute(script)
-    print("\n".join(out))
