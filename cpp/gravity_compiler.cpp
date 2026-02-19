@@ -313,7 +313,11 @@ int main(int argc, char** argv) {
         out.close();
 
         if (!build.empty()) {
-            std::string cmd = cxx + " -O3 -std=c++17 \"" + emit + "\" -o \"" + build + "\"";
+            std::string cmd = cxx + " -O3 -std=c++17 ";
+#ifdef _WIN32
+            cmd += "-static -static-libstdc++ -static-libgcc ";
+#endif
+            cmd += "\"" + emit + "\" -o \"" + build + "\"";
             int rc = std::system(cmd.c_str());
             if (rc != 0) throw std::runtime_error("compiler failed: " + cmd);
             std::cout << "built executable: " << build << "\n";

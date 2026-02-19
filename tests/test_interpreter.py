@@ -309,6 +309,18 @@ class InterpreterTests(unittest.TestCase):
             cmd = run_mock.call_args[0][0]
             self.assertIn("cpp/gravity_compiler.cpp", cmd)
 
+    def test_build_cpp_compiler_executable_windows_static_link_flags(self):
+        with (
+            patch("gravity_lang_interpreter.shutil.which", side_effect=["C:/mingw/bin/g++.exe"]),
+            patch("gravity_lang_interpreter.subprocess.run") as run_mock,
+            patch.object(gli.sys, "platform", "win32"),
+        ):
+            build_cpp_compiler_executable(name="gravityc-test", outdir="dist")
+            cmd = run_mock.call_args[0][0]
+            self.assertIn("-static", cmd)
+            self.assertIn("-static-libstdc++", cmd)
+            self.assertIn("-static-libgcc", cmd)
+
     def test_cli_build_cpp_exe_command(self):
         with (
             patch("gravity_lang_interpreter.build_cpp_compiler_executable", return_value=Path("dist/gravityc")),

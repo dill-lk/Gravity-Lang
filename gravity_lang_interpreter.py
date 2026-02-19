@@ -2387,7 +2387,10 @@ def build_cpp_compiler_executable(name: str = "gravityc", outdir: str = "dist", 
     if not source.exists():
         raise RuntimeError(f"Native compiler source not found: {source}")
 
-    cmd = [str(compiler), "-O3", "-std=c++17", str(source), "-o", str(target)]
+    cmd = [str(compiler), "-O3", "-std=c++17"]
+    if sys.platform.startswith("win"):
+        cmd += ["-static", "-static-libstdc++", "-static-libgcc"]
+    cmd += [str(source), "-o", str(target)]
     subprocess.run(cmd, check=True)
     return target
 

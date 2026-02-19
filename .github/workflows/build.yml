@@ -85,7 +85,24 @@ jobs:
         shell: pwsh
         run: |
           choco install mingw -y
-          echo "CXX=C:\\ProgramData\\chocolatey\\lib\\mingw\\tools\\install\\mingw64\\bin\\g++.exe" >> $env:GITHUB_ENV
+          $candidates = @(
+            "C:\\ProgramData\\chocolatey\\lib\\mingw\\tools\\install\\mingw64\\bin\\g++.exe",
+            "C:\\msys64\\mingw64\\bin\\g++.exe"
+          )
+          $found = $null
+          foreach ($c in $candidates) {
+            if (Test-Path $c) { $found = $c; break }
+          }
+          if (-not $found) {
+            $cmd = Get-Command g++ -ErrorAction SilentlyContinue
+            if ($cmd) { $found = $cmd.Source }
+          }
+          if (-not $found) {
+            throw "No g++ compiler found after MinGW install"
+          }
+          $bindir = Split-Path $found -Parent
+          echo "$bindir" >> $env:GITHUB_PATH
+          echo "CXX=$found" >> $env:GITHUB_ENV
 
       - name: Verify C++ backend availability
         run: python gravity_lang_interpreter.py backends
