@@ -1,4 +1,6 @@
 import os
+import shutil
+import subprocess
 import tempfile
 from pathlib import Path
 import unittest
@@ -9,6 +11,7 @@ import gravity_lang_interpreter as gli
 from gravity_lang_interpreter import (
     GravityInterpreter,
     Quantity,
+    build_cpp_compiler_executable,
     build_executable,
     create_physics_backend,
     create_windows_installer_bundle,
@@ -18,6 +21,50 @@ from gravity_lang_interpreter import (
 
 
 class InterpreterTests(unittest.TestCase):
+    def test_native_cpp_compiler_emits_and_builds(self):
+        cxx = shutil.which("g++") or shutil.which("clang++") or shutil.which("c++")
+        if cxx is None:
+            self.skipTest("C++ compiler is required for native compiler test")
+
+        with tempfile.TemporaryDirectory() as td:
+            compiler_bin = Path(td) / "gravityc"
+            compile_cmd = [cxx, "-O2", "-std=c++17", "cpp/gravity_compiler.cpp", "-o", str(compiler_bin)]
+            subprocess.run(compile_cmd, check=True)
+
+            script = Path(td) / "mini.gravity"
+            observe_file = Path(td) / "mini_positions.csv"
+            script.write_text(
+                f"""
+                sphere Earth at [0,0,0] mass 5.972e24[kg] fixed
+                sphere Moon at [384400,0,0][km] mass 7.348e22[kg] velocity [0,1.022,0][km/s]
+                grav all
+                friction 0.001
+                orbit t in 0..2 dt 60[s] integrator leapfrog {{
+                    thrust Moon by [0,0.001,0][km/s]
+                    print Moon.position
+                    print Moon.velocity
+                    observe Moon.position to "{observe_file}" frequency 1
+                }}
+                """,
+                encoding="utf-8",
+            )
+
+            generated_cpp = Path(td) / "mini.generated.cpp"
+            generated_exe = Path(td) / "mini_native"
+            subprocess.run(
+                [str(compiler_bin), str(script), "--emit", str(generated_cpp), "--build", str(generated_exe), "--run", "--cxx", cxx],
+                check=True,
+            )
+
+            self.assertTrue(generated_cpp.exists())
+            self.assertTrue(generated_exe.exists())
+            output = subprocess.check_output([str(generated_exe)], text=True)
+            self.assertIn("Moon.position=", output)
+            self.assertIn("Moon.velocity=", output)
+            self.assertTrue(observe_file.exists())
+            lines = observe_file.read_text(encoding="utf-8").strip().splitlines()
+            self.assertEqual(lines[0], "step,x,y,z")
+
     def test_object_creation_and_units(self):
         src = "sphere Earth at [0,0,0] mass 5.972e24[kg] radius 6371[km]"
         interp = GravityInterpreter()
@@ -215,6 +262,30 @@ class InterpreterTests(unittest.TestCase):
         self.assertEqual(len(output), 1)
         self.assertTrue(output[0].startswith("system.energy="))
 
+
+    def test_cpp_kernel_source_is_packaged(self):
+        path = gli.CppPhysicsBackend._kernel_source_path()
+        self.assertTrue(path.exists())
+        self.assertTrue(path.name.endswith(".cpp"))
+
+    def test_cpp_backend_can_initialize_without_numpy_dependency(self):
+        if shutil.which("g++") is None:
+            self.skipTest("g++ is required for C++ backend test")
+        backend = create_physics_backend("cpp")
+        self.assertIsInstance(backend, gli.CppPhysicsBackend)
+
+
+    def test_cpp_kernel_source_path_supports_frozen_bundle(self):
+        with patch.object(gli.sys, "_MEIPASS", "/tmp/frozen-app", create=True):
+            path = gli.CppPhysicsBackend._kernel_source_path()
+            self.assertEqual(path, Path("/tmp/frozen-app") / "cpp" / "gravity_kernel.cpp")
+
+    def test_interpreter_defaults_to_cpp_backend(self):
+        if shutil.which("g++") is None and shutil.which("clang++") is None and shutil.which("c++") is None:
+            self.skipTest("C++ compiler is required for default backend test")
+        interp = GravityInterpreter()
+        self.assertIsInstance(interp.physics_backend, gli.CppPhysicsBackend)
+
     def test_build_executable_requires_pyinstaller(self):
         with patch("gravity_lang_interpreter.shutil.which", return_value=None):
             with self.assertRaises(RuntimeError):
@@ -227,6 +298,36 @@ class InterpreterTests(unittest.TestCase):
         ):
             build_executable("gravity-test", "dist", auto_install=True)
             self.assertEqual(run_mock.call_count, 2)
+
+    def test_build_cpp_compiler_executable_invokes_compiler(self):
+        with (
+            patch("gravity_lang_interpreter.shutil.which", side_effect=["/usr/bin/g++"]),
+            patch("gravity_lang_interpreter.subprocess.run") as run_mock,
+        ):
+            out = build_cpp_compiler_executable(name="gravityc-test", outdir="dist")
+            self.assertIn("gravityc-test", str(out))
+            cmd = run_mock.call_args[0][0]
+            self.assertIn("cpp/gravity_compiler.cpp", cmd)
+
+    def test_build_cpp_compiler_executable_windows_static_link_flags(self):
+        with (
+            patch("gravity_lang_interpreter.shutil.which", side_effect=["C:/mingw/bin/g++.exe"]),
+            patch("gravity_lang_interpreter.subprocess.run") as run_mock,
+            patch.object(gli.sys, "platform", "win32"),
+        ):
+            build_cpp_compiler_executable(name="gravityc-test", outdir="dist")
+            cmd = run_mock.call_args[0][0]
+            self.assertIn("-static", cmd)
+            self.assertIn("-static-libstdc++", cmd)
+            self.assertIn("-static-libgcc", cmd)
+
+    def test_cli_build_cpp_exe_command(self):
+        with (
+            patch("gravity_lang_interpreter.build_cpp_compiler_executable", return_value=Path("dist/gravityc")),
+            patch("sys.argv", ["gravity_lang_interpreter.py", "build-cpp-exe", "--outdir", "dist"]),
+        ):
+            code = main()
+        self.assertEqual(code, 0)
 
 
 
@@ -289,6 +390,9 @@ class InterpreterTests(unittest.TestCase):
             self.assertIn("matplotlib", cmd)
             self.assertIn("PIL", cmd)
             self.assertIn("--collect-data", cmd)
+            self.assertIn("--add-data", cmd)
+            add_data_arg = cmd[cmd.index("--add-data") + 1]
+            self.assertIn("cpp/gravity_kernel.cpp", add_data_arg)
     def test_verlet_integrator(self):
         """Test the Verlet integrator."""
         src = """
@@ -384,11 +488,12 @@ class InterpreterTests(unittest.TestCase):
             path = tmp.name
         try:
             with (
-                patch("gravity_lang_interpreter.run_script_file", return_value=[]),
+                patch("gravity_lang_interpreter.run_script_file", return_value=[]) as run_mock,
                 patch("sys.argv", ["gravity_lang_interpreter.py", "run", path, "--headless"]),
             ):
                 code = main()
             self.assertEqual(code, 0)
+            self.assertEqual(run_mock.call_args.kwargs["backend_name"], "cpp")
         finally:
             os.remove(path)
 
@@ -398,9 +503,13 @@ class InterpreterTests(unittest.TestCase):
             path = tmp.name
 
         try:
-            with patch("sys.argv", ["gravity_lang_interpreter.py", "check", path]):
+            with (
+                patch("gravity_lang_interpreter.check_script_file") as check_mock,
+                patch("sys.argv", ["gravity_lang_interpreter.py", "check", path]),
+            ):
                 code = main()
             self.assertEqual(code, 0)
+            self.assertEqual(check_mock.call_args.kwargs["backend_name"], "cpp")
         finally:
             os.remove(path)
 

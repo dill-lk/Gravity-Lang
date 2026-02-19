@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import ctypes
+import hashlib
 import os
 import json
 import math
@@ -1098,7 +1099,7 @@ class NumPyPhysicsBackend:
         raise ValueError(f"Unsupported integrator: {integrator}")
 
 
-class CppPhysicsBackend(NumPyPhysicsBackend):
+class CppPhysicsBackend(PythonPhysicsBackend):
     """C++-accelerated backend for pairwise acceleration accumulation.
 
     Uses a tiny native kernel (compiled with g++) to compute acceleration vectors
@@ -1109,53 +1110,66 @@ class CppPhysicsBackend(NumPyPhysicsBackend):
         super().__init__(gravity_law=gravity_law)
         if self.gravity_law != newtonian_gravity:
             raise RuntimeError("CppPhysicsBackend currently supports only Newtonian gravity")
+        self._softening = 1e-9
         self._kernel = self._load_kernel()
 
+    @staticmethod
+    def _kernel_source_path() -> Path:
+        base_dir = Path(getattr(sys, "_MEIPASS", Path(__file__).parent))
+        return base_dir / "cpp" / "gravity_kernel.cpp"
+
+    @staticmethod
+    def _find_cpp_compiler() -> str | None:
+        preferred = os.environ.get("CXX", "").strip()
+        if preferred:
+            found = shutil.which(preferred)
+            if found:
+                return found
+            if Path(preferred).exists():
+                return preferred
+        for compiler in ("g++", "clang++", "c++"):
+            found = shutil.which(compiler)
+            if found:
+                return found
+        return None
+
     def _load_kernel(self) -> Any:
-        gxx = shutil.which("g++")
+        gxx = self._find_cpp_compiler()
         if not gxx:
-            raise RuntimeError("g++ compiler not found. Install g++ or use --backend numpy")
-        src = r'''#include <cmath>
-extern "C" void compute_acc(
-    int n,
-    int pair_count,
-    const int* src_idx,
-    const int* dst_idx,
-    const double* masses,
-    const double* pos,
-    double* acc
-){
-    const double G = 6.67430e-11;
-    for(int i=0;i<n*3;i++) acc[i]=0.0;
-    for(int p=0;p<pair_count;p++){
-        int s = src_idx[p];
-        int t = dst_idx[p];
-        double dx = pos[s*3+0]-pos[t*3+0];
-        double dy = pos[s*3+1]-pos[t*3+1];
-        double dz = pos[s*3+2]-pos[t*3+2];
-        double r = std::sqrt(dx*dx+dy*dy+dz*dz);
-        if(r<1e-9) r=1e-9;
-        double a = G*masses[p]/(r*r);
-        double invr = 1.0/r;
-        acc[t*3+0] += a*dx*invr;
-        acc[t*3+1] += a*dy*invr;
-        acc[t*3+2] += a*dz*invr;
-    }
-}
-'''
+            raise RuntimeError("No C++ compiler found. Install g++/clang++ or set CXX, or use --backend numpy")
+        kernel_src = self._kernel_source_path()
+        if not kernel_src.exists():
+            raise RuntimeError(f"C++ kernel source not found: {kernel_src}")
+
+        src = kernel_src.read_text(encoding="utf-8")
+        src_hash = hashlib.sha256(src.encode("utf-8")).hexdigest()[:16]
+
         td = Path(tempfile.gettempdir()) / "gravity_lang_cpp_kernel"
         td.mkdir(parents=True, exist_ok=True)
-        cpp = td / "kernel.cpp"
-        so = td / ("kernel.dll" if sys.platform.startswith("win") else "kernel.so")
+        cpp = td / f"kernel_{src_hash}.cpp"
+        so = td / (f"kernel_{src_hash}.dll" if sys.platform.startswith("win") else f"kernel_{src_hash}.so")
         cpp.write_text(src, encoding="utf-8")
+
         compile_cmd = [gxx, "-O3", "-shared", "-std=c++17"]
+        openmp_requested = os.environ.get("GRAVITY_CPP_OPENMP", "1") not in {"0", "false", "False"}
+        if openmp_requested:
+            compile_cmd.append("-fopenmp")
         if not sys.platform.startswith("win"):
             compile_cmd.append("-fPIC")
         compile_cmd += [str(cpp), "-o", str(so)]
-        try:
-            subprocess.run(compile_cmd, check=True, capture_output=True, text=True)
-        except subprocess.CalledProcessError as exc:
-            raise RuntimeError(f"Failed to compile C++ kernel: {exc.stderr.strip()}") from exc
+
+        if not so.exists():
+            try:
+                subprocess.run(compile_cmd, check=True, capture_output=True, text=True)
+            except subprocess.CalledProcessError as exc:
+                if openmp_requested:
+                    compile_no_omp = [arg for arg in compile_cmd if arg != "-fopenmp"]
+                    try:
+                        subprocess.run(compile_no_omp, check=True, capture_output=True, text=True)
+                    except subprocess.CalledProcessError:
+                        raise RuntimeError(f"Failed to compile C++ kernel: {exc.stderr.strip()}") from exc
+                else:
+                    raise RuntimeError(f"Failed to compile C++ kernel: {exc.stderr.strip()}") from exc
 
         lib = ctypes.CDLL(str(so))
         fn = lib.compute_acc
@@ -1167,11 +1181,12 @@ extern "C" void compute_acc(
             ctypes.POINTER(ctypes.c_double),
             ctypes.POINTER(ctypes.c_double),
             ctypes.POINTER(ctypes.c_double),
+            ctypes.c_double,
         ]
         fn.restype = None
         return fn
 
-    def _accelerations_for_positions_numpy(
+    def _accelerations_for_positions(
         self,
         objects: Dict[str, Body],
         pull_pairs: List[Tuple[str, str]],
@@ -1184,27 +1199,37 @@ extern "C" void compute_acc(
         n = len(objects)
         pair_count = len(pull_pairs)
 
-        src = np.array([name_to_idx[s] for s, _ in pull_pairs], dtype=np.int32)
-        dst = np.array([name_to_idx[t] for _, t in pull_pairs], dtype=np.int32)
-        masses = np.array([objects[s].mass for s, _ in pull_pairs], dtype=np.float64)
+        src_data = (ctypes.c_int * pair_count)(*[name_to_idx[s] for s, _ in pull_pairs])
+        dst_data = (ctypes.c_int * pair_count)(*[name_to_idx[t] for _, t in pull_pairs])
+        masses_data = (ctypes.c_double * pair_count)(*[objects[s].mass for s, _ in pull_pairs])
 
-        pos = np.zeros((n, 3), dtype=np.float64)
+        pos_data = (ctypes.c_double * (n * 3))()
         for name, idx in name_to_idx.items():
-            pos[idx] = positions_dict[name]
-        acc = np.zeros((n, 3), dtype=np.float64)
+            base = idx * 3
+            px, py, pz = positions_dict[name]
+            pos_data[base] = px
+            pos_data[base + 1] = py
+            pos_data[base + 2] = pz
+
+        acc_data = (ctypes.c_double * (n * 3))()
 
         self._kernel(
             ctypes.c_int(n),
             ctypes.c_int(pair_count),
-            src.ctypes.data_as(ctypes.POINTER(ctypes.c_int)),
-            dst.ctypes.data_as(ctypes.POINTER(ctypes.c_int)),
-            masses.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
-            pos.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
-            acc.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
+            src_data,
+            dst_data,
+            masses_data,
+            pos_data,
+            acc_data,
+            ctypes.c_double(self._softening),
         )
 
         return {
-            name: (float(acc[idx, 0]), float(acc[idx, 1]), float(acc[idx, 2]))
+            name: (
+                float(acc_data[idx * 3]),
+                float(acc_data[idx * 3 + 1]),
+                float(acc_data[idx * 3 + 2]),
+            )
             for name, idx in name_to_idx.items()
         }
 
@@ -1342,12 +1367,11 @@ solve_step(payload)
 
 def _default_backend_name(julia_bin: str = "julia") -> BackendName:
     """Prefer fastest available local backend with graceful fallback."""
-    if HAS_NUMPY:
-        try:
-            _ = CppPhysicsBackend()
-            return "cpp"
-        except RuntimeError:
-            pass
+    try:
+        _ = CppPhysicsBackend()
+        return "cpp"
+    except RuntimeError:
+        pass
     if HAS_NUMPY:
         return "numpy"
     if shutil.which(julia_bin):
@@ -1366,7 +1390,7 @@ class GravityInterpreter:
         self.variables: Dict[str, float] = {}
         self.global_friction = 0.0
         self.enable_collisions = True
-        self.physics_backend = physics_backend or create_physics_backend("auto")
+        self.physics_backend = physics_backend or create_physics_backend("cpp")
         self.visualizer: Visualizer3D | None = None
         self.enable_3d_viz = enable_3d_viz
         if enable_3d_viz:
@@ -2137,14 +2161,11 @@ def get_backend_availability(julia_bin: str = "julia") -> Dict[str, str]:
     status: Dict[str, str] = {"python": "available"}
     status["numpy"] = "available" if HAS_NUMPY else "missing dependency: numpy"
 
-    if HAS_NUMPY:
-        try:
-            _ = CppPhysicsBackend()
-            status["cpp"] = "available"
-        except RuntimeError as exc:
-            status["cpp"] = f"unavailable: {exc}"
-    else:
-        status["cpp"] = "unavailable: requires numpy and g++"
+    try:
+        _ = CppPhysicsBackend()
+        status["cpp"] = "available"
+    except RuntimeError as exc:
+        status["cpp"] = f"unavailable: {exc}"
 
     julia = shutil.which(julia_bin)
     status["julia_diffeq"] = "available" if julia else f"unavailable: julia binary not found at '{julia_bin}'"
@@ -2167,7 +2188,7 @@ def create_physics_backend(name: BackendName, julia_bin: str = "julia") -> Physi
 
 def run_script_file(script_path: str, enable_3d: bool = False, viz_interval: int = 1, 
                     create_animation: bool = False, anim_fps: int = 30,
-                    backend_name: BackendName = "auto", julia_bin: str = "julia",
+                    backend_name: BackendName = "cpp", julia_bin: str = "julia",
                     show_visualization: bool = True,
                     export_interactive: bool = False,
                     interactive_output_file: str = "gravity_interactive_3d.html") -> List[str]:
@@ -2290,7 +2311,7 @@ def export_interactive_3d_html(
     return out
 
 
-def check_script_file(script_path: str, backend_name: BackendName = "auto", julia_bin: str = "julia") -> None:
+def check_script_file(script_path: str, backend_name: BackendName = "cpp", julia_bin: str = "julia") -> None:
     run_script_file(script_path, backend_name=backend_name, julia_bin=julia_bin)
 
 
@@ -2324,6 +2345,8 @@ def build_executable(name: str, outdir: str, auto_install: bool = False, clean: 
         outdir,
         "gravity_lang_interpreter.py",
     ]
+    data_sep = ";" if sys.platform.startswith("win") else ":"
+    cmd[2:2] = ["--add-data", f"cpp/gravity_kernel.cpp{data_sep}cpp"]
     include_numpy = HAS_NUMPY or install_all_deps
     include_plotly = HAS_PLOTLY or install_all_deps
 
@@ -2340,6 +2363,36 @@ def build_executable(name: str, outdir: str, auto_install: bool = False, clean: 
         bundle = create_windows_installer_bundle(exe_path, outdir)
         print(f"Created installer bundle: {bundle}")
     return exe_path
+
+
+def build_cpp_compiler_executable(name: str = "gravityc", outdir: str = "dist", cxx: str | None = None) -> Path:
+    """Build the native C++ gravity compiler executable."""
+    preferred = (cxx or os.environ.get("CXX", "")).strip()
+    compiler: str | None = None
+    if preferred:
+        compiler = shutil.which(preferred) or (preferred if Path(preferred).exists() else None)
+    if compiler is None:
+        for candidate in ("g++", "clang++", "c++"):
+            found = shutil.which(candidate)
+            if found:
+                compiler = found
+                break
+    if compiler is None:
+        raise RuntimeError("No C++ compiler found. Install g++/clang++ or set CXX")
+
+    out_dir = Path(outdir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    target = out_dir / (f"{name}.exe" if sys.platform.startswith("win") else name)
+    source = Path("cpp") / "gravity_compiler.cpp"
+    if not source.exists():
+        raise RuntimeError(f"Native compiler source not found: {source}")
+
+    cmd = [str(compiler), "-O3", "-std=c++17"]
+    if sys.platform.startswith("win"):
+        cmd += ["-static", "-static-libstdc++", "-static-libgcc"]
+    cmd += [str(source), "-o", str(target)]
+    subprocess.run(cmd, check=True)
+    return target
 
 
 
@@ -2482,69 +2535,6 @@ def benchmark_backends(
     return timings
 
 
-def benchmark_backends(
-    object_count: int = 200,
-    steps: int = 20,
-    dt: float = 1.0,
-    repeats: int = 3,
-    warmup_steps: int = 2,
-    backend_names: List[str] | None = None,
-) -> Dict[str, float]:
-    if object_count < 2:
-        raise ValueError("object_count must be >= 2")
-    if steps < 1 or repeats < 1 or warmup_steps < 0:
-        raise ValueError("steps/repeats must be >= 1 and warmup_steps must be >= 0")
-
-    def build_case() -> tuple[Dict[str, Body], List[Tuple[str, str]]]:
-        objects: Dict[str, Body] = {}
-        for i in range(object_count):
-            objects[f"B{i}"] = Body(
-                name=f"B{i}",
-                shape="pointmass",
-                position=(float(i * 1000), float((i % 13) * 300), float((i % 7) * 200)),
-                velocity=(0.0, 0.0, 0.0),
-                mass=5.0e20 + i * 1.0e17,
-                radius=1.0,
-            )
-        pairs = [(f"B{i}", f"B{j}") for i in range(object_count) for j in range(object_count) if i != j]
-        return objects, pairs
-
-    selected = backend_names or ["python", "numpy", "cpp"]
-    backends: Dict[str, PhysicsBackend] = {}
-    for name in selected:
-        try:
-            backends[name] = create_physics_backend(name)  # type: ignore[arg-type]
-        except Exception:
-            continue
-
-    if "python" not in backends:
-        backends["python"] = PythonPhysicsBackend()
-
-    timings: Dict[str, float] = {}
-    for name, backend in backends.items():
-        objs, pairs = build_case()
-
-        for _ in range(warmup_steps):
-            backend.step(objs, pairs, dt, "verlet")
-
-        samples: List[float] = []
-        for _ in range(repeats):
-            objs, pairs = build_case()
-            start = time.perf_counter()
-            for _ in range(steps):
-                backend.step(objs, pairs, dt, "verlet")
-            samples.append((time.perf_counter() - start) * 1000.0)
-
-        timings[name] = statistics.median(samples)
-        timings[f"{name}_mean_ms"] = statistics.mean(samples)
-
-    baseline = timings.get("python", 1.0)
-    for name, elapsed in list(timings.items()):
-        if name in backends and name != "python":
-            timings[f"{name}_speedup"] = baseline / max(elapsed, 1e-9)
-    return timings
-
-
 def main() -> int:
     import argparse
 
@@ -2563,8 +2553,8 @@ def main() -> int:
                            help="Create animation from simulation (requires --3d)")
     run_parser.add_argument("--fps", type=int, default=30,
                            help="Animation frames per second (default: 30)")
-    run_parser.add_argument("--backend", choices=["auto", "python", "numpy", "cpp", "julia_diffeq"], default="auto",
-                           help="Physics backend: auto (default prefers cpp), python, numpy, cpp, or julia_diffeq")
+    run_parser.add_argument("--backend", choices=["auto", "python", "numpy", "cpp", "julia_diffeq"], default="cpp",
+                           help="Physics backend: cpp (default), auto, python, numpy, or julia_diffeq")
     run_parser.add_argument("--julia-bin", default="julia",
                            help="Julia binary path when using --backend julia_diffeq")
     run_parser.add_argument("--headless", action="store_true",
@@ -2576,8 +2566,8 @@ def main() -> int:
 
     check_parser = sub.add_parser("check", help="Parse and validate a .gravity script")
     check_parser.add_argument("check_file", help="Path to a .gravity script")
-    check_parser.add_argument("--backend", choices=["auto", "python", "numpy", "cpp", "julia_diffeq"], default="auto",
-                              help="Physics backend used for validation run")
+    check_parser.add_argument("--backend", choices=["auto", "python", "numpy", "cpp", "julia_diffeq"], default="cpp",
+                              help="Physics backend used for validation run (default: cpp)")
     check_parser.add_argument("--julia-bin", default="julia",
                               help="Julia binary path when using --backend julia_diffeq")
 
@@ -2587,7 +2577,7 @@ def main() -> int:
     bench_parser.add_argument("--dt", type=float, default=1.0, help="Step size in seconds")
     bench_parser.add_argument("--repeats", type=int, default=3, help="Benchmark repeats (median reported)")
     bench_parser.add_argument("--warmup", type=int, default=2, help="Warmup steps before timing")
-    bench_parser.add_argument("--backends", default="python,numpy,cpp", help="Comma-separated backends to test")
+    bench_parser.add_argument("--backends", default="cpp,python,numpy", help="Comma-separated backends to test")
     bench_parser.add_argument("--csv-out", default="", help="Optional path to write benchmark CSV")
 
     backends_parser = sub.add_parser("backends", help="Show backend availability on this machine")
@@ -2617,6 +2607,11 @@ def main() -> int:
         help="Install full standalone dependency set (numpy/matplotlib/pillow/plotly/pyinstaller) before build",
     )
 
+    cpp_exe_parser = sub.add_parser("build-cpp-exe", help="Build native gravityc C++ compiler executable")
+    cpp_exe_parser.add_argument("--name", default="gravityc", help="Executable name")
+    cpp_exe_parser.add_argument("--outdir", default="dist", help="Output directory")
+    cpp_exe_parser.add_argument("--cxx", default="", help="C++ compiler path/name (overrides CXX)")
+
     parser.add_argument("legacy_file", nargs="?", help="Backward-compatible: run a .gravity script directly")
 
     args = parser.parse_args()
@@ -2633,7 +2628,7 @@ def main() -> int:
             viz_interval=args.viz_interval,
             create_animation=getattr(args, 'create_animation', False),
             anim_fps=getattr(args, 'fps', 30),
-            backend_name=getattr(args, 'backend', 'python'),
+            backend_name=getattr(args, 'backend', 'cpp'),
             julia_bin=getattr(args, 'julia_bin', 'julia'),
             show_visualization=not getattr(args, 'headless', False),
             export_interactive=getattr(args, 'interactive_viewer', False),
@@ -2645,7 +2640,7 @@ def main() -> int:
     if args.command == "check":
         check_script_file(
             args.check_file,
-            backend_name=getattr(args, 'backend', 'python'),
+            backend_name=getattr(args, 'backend', 'cpp'),
             julia_bin=getattr(args, 'julia_bin', 'julia'),
         )
         print(f"OK: {args.check_file}")
@@ -2693,8 +2688,17 @@ def main() -> int:
         print(f"Built executable: {output_path}")
         return 0
 
+    if args.command == "build-cpp-exe":
+        output_path = build_cpp_compiler_executable(
+            name=args.name,
+            outdir=args.outdir,
+            cxx=args.cxx or None,
+        )
+        print(f"Built native C++ compiler executable: {output_path}")
+        return 0
+
     if args.legacy_file:
-        output = run_script_file(args.legacy_file, backend_name="auto")
+        output = run_script_file(args.legacy_file, backend_name="cpp")
         print("\n".join(output))
         return 0
 
