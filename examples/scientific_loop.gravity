@@ -2,6 +2,9 @@ sphere Earth at [0,0,0] mass 5.972e24[kg] fixed
 sphere Moon at [384400,0,0][km] mass 7.348e22[kg] velocity [0,1,0][km/s]
 sphere Satellite at [7000,0,0][km] mass 500[kg] velocity [0,7.5,0][km/s]
 
+gravity_constant 6.67430e-11
+gravity_model gr_correction beta 1e12
+
 simulate t in 0..12 step 3600[s] integrator leapfrog {
     grav all
     thrust Satellite by [0,0.001,0][km/s]
@@ -9,8 +12,10 @@ simulate t in 0..12 step 3600[s] integrator leapfrog {
     collisions on
     monitor energy
     monitor momentum
+    monitor angular_momentum
     softening 1[km]
     adaptive tol 1e-3 min 60[s] max 3600[s]
     print Moon.position
     observe Moon.position to "moon.csv" frequency 1
+    observe Satellite.velocity to "satellite_velocity.csv" frequency 1
 }

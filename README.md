@@ -36,8 +36,9 @@ ctest --output-on-failure
 - Simulation loops: `simulate` / `orbit`
 - Integrators: `euler`, `verlet`, `leapfrog`, `rk4`
 - Gravity rules: `grav all`, `A pull B, C`, and `step_physics(A,B)`
-- Runtime actions: `thrust`, `friction`, `collisions on`, `monitor energy`, `print ...position|velocity`
-- CSV export: `observe Body.position to "file" frequency N`
+- Gravity tuning: `gravity_constant`, `gravity_model newtonian|mond|gr_correction`
+- Runtime actions: `thrust`, `friction`, `collisions on`, `monitor energy`, `monitor momentum`, `monitor angular_momentum`, `print ...position|velocity`
+- CSV export: `observe Body.position|velocity to "file" frequency N`
 - Orbital diagnostics: `orbital_elements Body around Center`
 
 ## Notes

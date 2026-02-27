@@ -17,6 +17,9 @@ namespace {
 
 using Vec3 = std::array<double, 3>;
 
+enum class ObserveKind { Position, Velocity };
+enum class GravityModel { Newtonian, Mond, GRCorrection };
+
 struct Body {
     std::string name;
     Vec3 pos{0.0, 0.0, 0.0};
@@ -30,6 +33,7 @@ struct ObserveSpec {
     std::string name;
     std::string output_file;
     int frequency = 1;
+    ObserveKind kind = ObserveKind::Position;
 };
 
 struct ThrustSpec {
@@ -58,11 +62,16 @@ struct Program {
     bool collisions_on = false;
     bool monitor_energy = false;
     bool monitor_momentum = false;
+    bool monitor_angular_momentum = false;
     bool adaptive_on = false;
     double adaptive_tol = 1e-3;
     double adaptive_dt_min = 1.0;
     double adaptive_dt_max = 3600.0;
     double softening = 1e-9;
+    GravityModel gravity_model = GravityModel::Newtonian;
+    double mond_a0 = 1.2e-10;
+    double gr_beta = 1e16;
+    double gravity_constant = 6.67430e-11;
 };
 
 std::string trim(std::string s) {
@@ -157,6 +166,24 @@ Vec3 center_of_mass(const std::vector<Body>& bodies) {
     return {static_cast<double>(x * inv), static_cast<double>(y * inv), static_cast<double>(z * inv)};
 }
 
+Vec3 total_angular_momentum(const std::vector<Body>& bodies) {
+    long double lx = 0.0L;
+    long double ly = 0.0L;
+    long double lz = 0.0L;
+    for (const auto& b : bodies) {
+        const long double px = static_cast<long double>(b.mass) * static_cast<long double>(b.vel[0]);
+        const long double py = static_cast<long double>(b.mass) * static_cast<long double>(b.vel[1]);
+        const long double pz = static_cast<long double>(b.mass) * static_cast<long double>(b.vel[2]);
+        const long double rx = static_cast<long double>(b.pos[0]);
+        const long double ry = static_cast<long double>(b.pos[1]);
+        const long double rz = static_cast<long double>(b.pos[2]);
+        lx += ry * pz - rz * py;
+        ly += rz * px - rx * pz;
+        lz += rx * py - ry * px;
+    }
+    return {static_cast<double>(lx), static_cast<double>(ly), static_cast<double>(lz)};
+}
+
 void apply_collisions(std::vector<Body>& bodies) {
     for (size_t i = 0; i < bodies.size(); ++i) {
         for (size_t j = i + 1; j < bodies.size(); ++j) {
@@ -213,11 +240,13 @@ Program parse_gravity(const std::string& script_path) {
     std::regex grav_all_re(R"(^grav\s+all\s*$)");
     std::regex friction_re(R"(^friction\s+([-+0-9.eE]+)\s*$)");
     std::regex thrust_re(R"(^thrust\s+([A-Za-z_]\w*)\s+by\s+(\[[^\]]+\])\[(\w+\/s)\]\s*$)");
-    std::regex observe_re(R"obs(^observe\s+([A-Za-z_]\w*)\.position\s+to\s+"([^"]+)"\s+frequency\s+(\d+)\s*$)obs");
+    std::regex observe_re(R"obs(^observe\s+([A-Za-z_]\w*)\.(position|velocity)\s+to\s+"([^"]+)"\s+frequency\s+(\d+)\s*$)obs");
     std::regex orbital_re(R"(^orbital_elements\s+([A-Za-z_]\w*)\s+around\s+([A-Za-z_]\w*)\s*$)");
     std::regex step_physics_re(R"(^step_physics\(\s*([A-Za-z_]\w*)\s*,\s*([A-Za-z_]\w*)\s*\)\s*$)");
     std::regex adaptive_re(R"(^adaptive\s+tol\s+([-+0-9.eE]+)\s+min\s+([-+0-9.eE]+)\[(\w+)\]\s+max\s+([-+0-9.eE]+)\[(\w+)\]\s*$)");
     std::regex softening_re(R"(^softening\s+([-+0-9.eE]+)\[(\w+)\]\s*$)");
+    std::regex gravity_model_re(R"(^gravity_model\s+(newtonian|mond|gr_correction)(?:\s+a0\s+([-+0-9.eE]+)\[(m\/s2)\])?(?:\s+beta\s+([-+0-9.eE]+))?\s*$)");
+    std::regex gravity_constant_re(R"(^gravity_constant\s+([-+0-9.eE]+)\s*$)");
 
     bool in_block = false;
     bool has_sim = false;
@@ -291,6 +320,11 @@ Program parse_gravity(const std::string& script_path) {
             continue;
         }
 
+        if (line == "monitor angular_momentum") {
+            p.monitor_angular_momentum = true;
+            continue;
+        }
+
         if (line == "collisions on") {
             p.collisions_on = true;
             continue;
@@ -316,7 +350,12 @@ Program parse_gravity(const std::string& script_path) {
         }
 
         if (std::regex_match(line, m, observe_re)) {
-            p.observe_specs.push_back({m[1], m[2], std::max(1, std::stoi(m[3]))});
+            ObserveSpec obs;
+            obs.name = m[1];
+            obs.kind = (m[2] == "velocity") ? ObserveKind::Velocity : ObserveKind::Position;
+            obs.output_file = m[3];
+            obs.frequency = std::max(1, std::stoi(m[4]));
+            p.observe_specs.push_back(obs);
             continue;
         }
 
@@ -338,6 +377,25 @@ Program parse_gravity(const std::string& script_path) {
 
         if (std::regex_match(line, m, softening_re)) {
             p.softening = std::max(0.0, std::stod(m[1]) * unit_scale(m[2]));
+            continue;
+        }
+
+        if (std::regex_match(line, m, gravity_constant_re)) {
+            p.gravity_constant = std::stod(m[1]);
+            continue;
+        }
+
+        if (std::regex_match(line, m, gravity_model_re)) {
+            const std::string model = m[1];
+            if (model == "newtonian") {
+                p.gravity_model = GravityModel::Newtonian;
+            } else if (model == "mond") {
+                p.gravity_model = GravityModel::Mond;
+                if (m[2].matched) p.mond_a0 = std::stod(m[2]);
+            } else {
+                p.gravity_model = GravityModel::GRCorrection;
+                if (m[4].matched) p.gr_beta = std::stod(m[4]);
+            }
             continue;
         }
 
@@ -380,8 +438,14 @@ Program parse_gravity(const std::string& script_path) {
     return p;
 }
 
-std::vector<Vec3> compute_acc(const std::vector<Body>& bodies, const std::vector<std::pair<int, int>>& pulls, double softening) {
-    constexpr long double G = 6.67430e-11L;
+std::vector<Vec3> compute_acc(const std::vector<Body>& bodies,
+                             const std::vector<std::pair<int, int>>& pulls,
+                             double softening,
+                             GravityModel gravity_model,
+                             double mond_a0,
+                             double gr_beta,
+                             double gravity_constant) {
+    const long double G = static_cast<long double>(gravity_constant);
     std::vector<Vec3> a(bodies.size(), {0.0, 0.0, 0.0});
     std::vector<long double> ax(bodies.size(), 0.0L), ay(bodies.size(), 0.0L), az(bodies.size(), 0.0L);
     const long double s2 = static_cast<long double>(softening) * static_cast<long double>(softening);
@@ -395,7 +459,15 @@ std::vector<Vec3> compute_acc(const std::vector<Body>& bodies, const std::vector
         const long double dz = static_cast<long double>(src.pos[2]) - static_cast<long double>(dst.pos[2]);
         const long double r2 = dx * dx + dy * dy + dz * dz + s2 + 1e-18L;
         const long double r = std::sqrt(r2);
-        const long double am = G * static_cast<long double>(src.mass) / r2;
+        long double am = G * static_cast<long double>(src.mass) / r2;
+        if (gravity_model == GravityModel::Mond) {
+            const long double aN = am;
+            const long double a0 = static_cast<long double>(mond_a0);
+            am = std::sqrt(aN * aN + aN * a0);
+        } else if (gravity_model == GravityModel::GRCorrection) {
+            const long double beta = static_cast<long double>(gr_beta);
+            am *= (1.0L + beta / std::max(1e-18L, r2));
+        }
         ax[static_cast<size_t>(t)] += am * dx / r;
         ay[static_cast<size_t>(t)] += am * dy / r;
         az[static_cast<size_t>(t)] += am * dz / r;
@@ -455,7 +527,7 @@ void run_program(Program& p) {
 
         double dt_step = p.dt;
         if (p.adaptive_on) {
-            const auto a_probe = compute_acc(p.bodies, pulls, p.softening);
+            const auto a_probe = compute_acc(p.bodies, pulls, p.softening, p.gravity_model, p.mond_a0, p.gr_beta, p.gravity_constant);
             double amax = 0.0;
             for (const auto& av : a_probe) {
                 const double am = mag(av);
@@ -466,7 +538,7 @@ void run_program(Program& p) {
         }
 
         if (p.integrator == "euler") {
-            auto a = compute_acc(p.bodies, pulls, p.softening);
+            auto a = compute_acc(p.bodies, pulls, p.softening, p.gravity_model, p.mond_a0, p.gr_beta, p.gravity_constant);
             for (size_t i = 0; i < p.bodies.size(); ++i) {
                 if (p.bodies[i].fixed) continue;
                 p.bodies[i].vel[0] += a[i][0] * dt_step;
@@ -477,7 +549,7 @@ void run_program(Program& p) {
                 p.bodies[i].pos[2] += p.bodies[i].vel[2] * dt_step;
             }
         } else if (p.integrator == "leapfrog") {
-            auto a1 = compute_acc(p.bodies, pulls, p.softening);
+            auto a1 = compute_acc(p.bodies, pulls, p.softening, p.gravity_model, p.mond_a0, p.gr_beta, p.gravity_constant);
             std::vector<Vec3> half(p.bodies.size(), {0.0, 0.0, 0.0});
             for (size_t i = 0; i < p.bodies.size(); ++i) {
                 if (p.bodies[i].fixed) continue;
@@ -488,7 +560,7 @@ void run_program(Program& p) {
                 p.bodies[i].pos[1] += half[i][1] * dt_step;
                 p.bodies[i].pos[2] += half[i][2] * dt_step;
             }
-            auto a2 = compute_acc(p.bodies, pulls, p.softening);
+            auto a2 = compute_acc(p.bodies, pulls, p.softening, p.gravity_model, p.mond_a0, p.gr_beta, p.gravity_constant);
             for (size_t i = 0; i < p.bodies.size(); ++i) {
                 if (p.bodies[i].fixed) continue;
                 p.bodies[i].vel[0] = half[i][0] + a2[i][0] * dt_step * 0.5;
@@ -497,7 +569,7 @@ void run_program(Program& p) {
             }
         } else if (p.integrator == "rk4") {
             const auto y0 = p.bodies;
-            const auto a1 = compute_acc(y0, pulls, p.softening);
+            const auto a1 = compute_acc(y0, pulls, p.softening, p.gravity_model, p.mond_a0, p.gr_beta, p.gravity_constant);
 
             auto y1 = y0;
             for (size_t i = 0; i < y1.size(); ++i) {
@@ -510,7 +582,7 @@ void run_program(Program& p) {
                 y1[i].vel[2] += a1[i][2] * dt_step * 0.5;
             }
 
-            const auto a2 = compute_acc(y1, pulls, p.softening);
+            const auto a2 = compute_acc(y1, pulls, p.softening, p.gravity_model, p.mond_a0, p.gr_beta, p.gravity_constant);
             auto y2 = y0;
             for (size_t i = 0; i < y2.size(); ++i) {
                 if (y2[i].fixed) continue;
@@ -522,7 +594,7 @@ void run_program(Program& p) {
                 y2[i].vel[2] += a2[i][2] * dt_step * 0.5;
             }
 
-            const auto a3 = compute_acc(y2, pulls, p.softening);
+            const auto a3 = compute_acc(y2, pulls, p.softening, p.gravity_model, p.mond_a0, p.gr_beta, p.gravity_constant);
             auto y3 = y0;
             for (size_t i = 0; i < y3.size(); ++i) {
                 if (y3[i].fixed) continue;
@@ -534,7 +606,7 @@ void run_program(Program& p) {
                 y3[i].vel[2] += a3[i][2] * dt_step;
             }
 
-            const auto a4 = compute_acc(y3, pulls, p.softening);
+            const auto a4 = compute_acc(y3, pulls, p.softening, p.gravity_model, p.mond_a0, p.gr_beta, p.gravity_constant);
             for (size_t i = 0; i < p.bodies.size(); ++i) {
                 if (p.bodies[i].fixed) continue;
                 p.bodies[i].pos[0] = y0[i].pos[0] + (dt_step / 6.0) * (y0[i].vel[0] + 2.0 * y1[i].vel[0] + 2.0 * y2[i].vel[0] + y3[i].vel[0]);
@@ -545,7 +617,7 @@ void run_program(Program& p) {
                 p.bodies[i].vel[2] = y0[i].vel[2] + (dt_step / 6.0) * (a1[i][2] + 2.0 * a2[i][2] + 2.0 * a3[i][2] + a4[i][2]);
             }
         } else {
-            auto a1 = compute_acc(p.bodies, pulls, p.softening);
+            auto a1 = compute_acc(p.bodies, pulls, p.softening, p.gravity_model, p.mond_a0, p.gr_beta, p.gravity_constant);
             std::vector<Body> tmp = p.bodies;
             for (size_t i = 0; i < p.bodies.size(); ++i) {
                 if (p.bodies[i].fixed) continue;
@@ -553,7 +625,7 @@ void run_program(Program& p) {
                 tmp[i].pos[1] = p.bodies[i].pos[1] + p.bodies[i].vel[1] * dt_step + 0.5 * a1[i][1] * dt_step * dt_step;
                 tmp[i].pos[2] = p.bodies[i].pos[2] + p.bodies[i].vel[2] * dt_step + 0.5 * a1[i][2] * dt_step * dt_step;
             }
-            auto a2 = compute_acc(tmp, pulls, p.softening);
+            auto a2 = compute_acc(tmp, pulls, p.softening, p.gravity_model, p.mond_a0, p.gr_beta, p.gravity_constant);
             for (size_t i = 0; i < p.bodies.size(); ++i) {
                 if (p.bodies[i].fixed) continue;
                 p.bodies[i].pos = tmp[i].pos;
@@ -582,7 +654,8 @@ void run_program(Program& p) {
             if (!index.contains(obs.name)) continue;
             if ((step + 1) % obs.frequency == 0) {
                 const auto& o = p.bodies[static_cast<size_t>(index[obs.name])];
-                observe_files[i] << (step + 1) << ',' << o.pos[0] << ',' << o.pos[1] << ',' << o.pos[2] << "\n";
+                const Vec3& v = (obs.kind == ObserveKind::Velocity) ? o.vel : o.pos;
+                observe_files[i] << (step + 1) << ',' << v[0] << ',' << v[1] << ',' << v[2] << "\n";
             }
         }
 
@@ -594,6 +667,10 @@ void run_program(Program& p) {
             const auto com = center_of_mass(p.bodies);
             std::cout << "momentum.step(" << (step + 1) << ")=(" << mom[0] << ", " << mom[1] << ", " << mom[2] << ")"
                       << " com=(" << com[0] << ", " << com[1] << ", " << com[2] << ")\n";
+        }
+        if (p.monitor_angular_momentum) {
+            const auto ang = total_angular_momentum(p.bodies);
+            std::cout << "angular_momentum.step(" << (step + 1) << ")=(" << ang[0] << ", " << ang[1] << ", " << ang[2] << ")\n";
         }
     }
 
