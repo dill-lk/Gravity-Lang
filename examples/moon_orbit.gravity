@@ -21,7 +21,7 @@ simulate t in 0..28 step 3600[s] integrator verlet {
     print Moon.position
     
     # Save to file for plotting
-    observe Moon.position to "artifacts/moon_orbit.csv" frequency 1
+    observe Moon.position to "moon_orbit.csv" frequency 1
 }
 
 # Calculate final orbital elements to verify orbit stability
