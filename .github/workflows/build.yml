@@ -29,158 +29,102 @@ jobs:
         with:
           filters: |
             build_relevant:
-              - 'gravity_lang_interpreter.py'
-              - 'cpp/gravity_compiler.cpp'
+              - 'CMakeLists.txt'
+              - 'cpp/**'
+              - 'examples/**'
               - '.github/workflows/build.yml'
 
   build:
-    name: Build executable (${{ matrix.os }})
+    name: Build C++ runtime (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     needs: [detect-changes]
     if: |
-      github.event_name != 'pull_request' && (
-        github.event_name == 'workflow_dispatch' ||
-        startsWith(github.ref, 'refs/tags/v') ||
-        needs.detect-changes.outputs.build_relevant_changed == 'true'
-      )
+      github.event_name == 'pull_request' ||
+      github.event_name == 'workflow_dispatch' ||
+      startsWith(github.ref, 'refs/tags/v') ||
+      needs.detect-changes.outputs.build_relevant_changed == 'true'
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: windows-latest
-            exe_name: gravity-lang-windows
-            artifact_path: dist/gravity-lang-windows.exe
           - os: ubuntu-latest
-            exe_name: gravity-lang-linux
-            artifact_path: dist/gravity-lang-linux
+            exe_name: gravity-linux
+            bin_path: build/gravity
+            compiler_path: build/gravityc
           - os: macos-latest
-            exe_name: gravity-lang-macos
-            artifact_path: dist/gravity-lang-macos
+            exe_name: gravity-macos
+            bin_path: build/gravity
+            compiler_path: build/gravityc
+          - os: windows-latest
+            exe_name: gravity-windows
+            bin_path: build/Release/gravity.exe
+            compiler_path: build/Release/gravityc.exe
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
+      - name: Configure (Linux/macOS)
+        if: runner.os != 'Windows'
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 
-      - name: Install build dependencies
+      - name: Configure (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --config Release -j
+
+      - name: Test (ctest)
+        run: ctest --test-dir build -C Release --output-on-failure
+
+      - name: Smoke test interpreter (POSIX)
+        if: runner.os != 'Windows'
+        run: ./build/gravity run examples/moon_orbit.gravity | head -n 3
+
+      - name: Smoke test interpreter (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: .\build\Release\gravity.exe run examples\moon_orbit.gravity | Select-Object -First 3
+
+      - name: Smoke test native compiler (POSIX)
+        if: runner.os != 'Windows'
         run: |
-          python -m pip install --upgrade pip
-          pip install pyinstaller numpy matplotlib pillow plotly
+          ./build/gravityc examples/moon_orbit.gravity --emit build/moon.generated.cpp --build build/moon_native --run
 
-      - name: Install C++ toolchain (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y g++
-
-      - name: Configure C++ compiler (macOS)
-        if: runner.os == 'macOS'
-        run: echo "CXX=clang++" >> "$GITHUB_ENV"
-
-      - name: Configure C++ compiler (Windows)
+      - name: Smoke test native compiler (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          choco install mingw -y
-          $candidates = @(
-            "C:\\ProgramData\\chocolatey\\lib\\mingw\\tools\\install\\mingw64\\bin\\g++.exe",
-            "C:\\msys64\\mingw64\\bin\\g++.exe"
-          )
-          $found = $null
-          foreach ($c in $candidates) {
-            if (Test-Path $c) { $found = $c; break }
-          }
-          if (-not $found) {
-            $cmd = Get-Command g++ -ErrorAction SilentlyContinue
-            if ($cmd) { $found = $cmd.Source }
-          }
-          if (-not $found) {
-            throw "No g++ compiler found after MinGW install"
-          }
-          $bindir = Split-Path $found -Parent
-          echo "$bindir" >> $env:GITHUB_PATH
-          echo "CXX=$found" >> $env:GITHUB_ENV
+          .\build\Release\gravityc.exe examples\moon_orbit.gravity --emit build\moon.generated.cpp --build build\moon_native.exe
+          .\build\moon_native.exe
 
-      - name: Verify C++ backend availability
-        run: python gravity_lang_interpreter.py backends
+      - name: Package binaries (POSIX)
+        if: runner.os != 'Windows'
+        run: |
+          mkdir -p dist
+          cp "${{ matrix.bin_path }}" "dist/${{ matrix.exe_name }}"
+          cp "${{ matrix.compiler_path }}" "dist/gravityc-${{ runner.os }}"
 
-      - name: Build native Gravity compiler (C++)
+      - name: Package binaries (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          python gravity_lang_interpreter.py build-cpp-exe --name gravityc --outdir dist
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item "${{ matrix.bin_path }}" "dist/${{ matrix.exe_name }}.exe"
+          Copy-Item "${{ matrix.compiler_path }}" "dist/gravityc-${{ runner.os }}.exe"
 
-      - name: Build native Gravity compiler (C++)
-        if: runner.os != 'Windows'
-        run: |
-          python gravity_lang_interpreter.py build-cpp-exe --name gravityc --outdir dist
-
-      - name: Smoke test native Gravity compiler
-        if: runner.os != 'Windows'
-        run: |
-          dist/gravityc examples/moon_orbit.gravity --emit dist/moon_orbit.generated.cpp --build dist/moon_orbit_native --run
-
-      - name: Smoke test native Gravity compiler (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          .\dist\gravityc.exe examples\moon_orbit.gravity --emit dist\moon_orbit.generated.cpp --build dist\moon_orbit_native.exe
-          .\dist\moon_orbit_native.exe
-
-      - name: Build executable (Windows + installer bundle)
-        if: runner.os == 'Windows'
-        run: python gravity_lang_interpreter.py build-exe --name ${{ matrix.exe_name }} --outdir dist --install-all-deps --with-installer
-
-      - name: Build executable (POSIX)
-        if: runner.os != 'Windows'
-        run: python gravity_lang_interpreter.py build-exe --name ${{ matrix.exe_name }} --outdir dist --install-all-deps
-
-      - name: Generate visualization artifacts (Python, headless)
-        if: runner.os != 'Windows'
-        run: |
-          python gravity_lang_interpreter.py run examples/moon_orbit.gravity --backend cpp --3d --animate --fps 12 --headless --interactive --interactive-out dist/visuals/gravity_interactive_3d.html
-          mkdir -p dist/visuals
-          cp -f gravity_simulation_3d.png dist/visuals/ || true
-          cp -f gravity_animation.gif dist/visuals/ || true
-
-      - name: Smoke test executable (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: .\dist\${{ matrix.exe_name }}.exe --version
-
-      - name: Smoke test executable (POSIX)
-        if: runner.os != 'Windows'
-        run: ./dist/${{ matrix.exe_name }} --version
-
-      - name: Upload executable artifact
+      - name: Upload runtime artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.exe_name }}
-          path: ${{ matrix.artifact_path }}
+          path: dist/${{ matrix.exe_name }}*
 
-      - name: Upload native C++ compiler artifact
+      - name: Upload compiler artifact
         uses: actions/upload-artifact@v4
         with:
           name: gravityc-${{ matrix.os }}
-          path: |
-            dist/gravityc
-            dist/gravityc.exe
-
-      - name: Upload dist directory snapshot
-        uses: actions/upload-artifact@v4
-        with:
-          name: dist-${{ matrix.exe_name }}
-          path: dist/**
-
-      - name: Upload Windows installer bundle
-        if: runner.os == 'Windows'
-        uses: actions/upload-artifact@v4
-        with:
-          name: gravity-lang-windows-installer
-          path: dist/installer-windows/**
+          path: dist/gravityc-${{ runner.os }}*
 
   release:
     name: Publish GitHub Release
@@ -234,7 +178,7 @@ jobs:
           makeLatest: ${{ steps.release_meta.outputs.make_latest }}
           artifacts: "release-assets/*"
           body: |
-            Automated build artifacts from CI.
+            Automated C++ build artifacts from CI.
 
             - Commit: ${{ github.sha }}
             - Workflow: ${{ github.workflow }}
