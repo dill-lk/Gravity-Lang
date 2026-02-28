@@ -151,14 +151,55 @@ void ensure_parent_directory(const std::string& file_path) {
     if (ec) throw std::runtime_error("failed to create output directory: " + parent.string());
 }
 
-std::string shell_quote(const std::string& value) {
-    std::string quoted = "\"";
-    for (char ch : value) {
-        if (ch == '\\' || ch == '"') quoted.push_back('\\');
-        quoted.push_back(ch);
+struct TelemetryPoint {
+    int step = 0;
+    double altitude_km = 0.0;
+    double speed_mps = 0.0;
+};
+
+std::string safe_file_component(std::string name) {
+    for (char& ch : name) {
+        if (!std::isalnum(static_cast<unsigned char>(ch)) && ch != '-' && ch != '_') ch = '_';
     }
-    quoted.push_back('"');
-    return quoted;
+    if (name.empty()) return "body";
+    return name;
+}
+
+void write_telemetry_svg(const std::string& path, const std::vector<TelemetryPoint>& points, const std::string& body_name) {
+    if (points.empty()) return;
+    ensure_parent_directory(path);
+    std::ofstream out(path);
+    if (!out) throw std::runtime_error("failed to open telemetry output: " + path);
+
+    const int width = 1200;
+    const int height = 720;
+    const int margin = 70;
+    const int plot_h = 520;
+
+    const int step_min = points.front().step;
+    const int step_max = points.back().step;
+    const double step_span = std::max(1.0, static_cast<double>(step_max - step_min));
+
+    double max_alt = 1.0;
+    for (const auto& p : points) max_alt = std::max(max_alt, p.altitude_km);
+
+    std::ostringstream poly;
+    std::ostringstream motion_path;
+    for (size_t i = 0; i < points.size(); ++i) {
+        const double x = margin + (static_cast<double>(points[i].step - step_min) / step_span) * (width - margin * 2);
+        const double y = margin + plot_h - (points[i].altitude_km / max_alt) * plot_h;
+        poly << x << ',' << y << ' ';
+        motion_path << (i == 0 ? 'M' : 'L') << x << ' ' << y << ' ';
+    }
+
+    out << "<svg xmlns='http://www.w3.org/2000/svg' width='" << width << "' height='" << height << "' viewBox='0 0 " << width << ' ' << height << "'>\n";
+    out << "<rect width='100%25' height='100%25' fill='#070d1a'/>\n";
+    out << "<text x='" << margin << "' y='42' fill='#f8fafc' font-size='26' font-family='Segoe UI,Arial'>Gravity-Lang Animated Telemetry · " << body_name << "</text>\n";
+    out << "<text x='" << margin << "' y='64' fill='#94a3b8' font-size='14'>step " << step_min << " to " << step_max << " · altitude profile</text>\n";
+    out << "<rect x='" << margin << "' y='" << margin << "' width='" << (width - margin * 2) << "' height='" << plot_h << "' fill='none' stroke='#1f2a3d'/>\n";
+    out << "<polyline fill='none' stroke='#22d3ee' stroke-width='2.5' points='" << poly.str() << "'/>\n";
+    out << "<circle r='7' fill='#38bdf8'><animateMotion dur='8s' repeatCount='indefinite' path='" << motion_path.str() << "'/></circle>\n";
+    out << "</svg>\n";
 }
 
 double unit_scale(const std::string& unit) {
@@ -1092,6 +1133,10 @@ void run_program(Program& p) {
     const double baseline_energy = total_energy(p.bodies);
     const Vec3 baseline_momentum = total_momentum(p.bodies);
 
+    std::vector<TelemetryPoint> telemetry_points;
+    telemetry_points.reserve(static_cast<size_t>(std::max(1, p.steps)));
+    const std::string telemetry_body = p.auto_plot_body.empty() ? "Rocket" : p.auto_plot_body;
+
     for (const auto& req : p.orbital_requests) {
         if (!req.before_sim) continue;
         if (!index.contains(req.body) || !index.contains(req.center)) continue;
@@ -1468,6 +1513,14 @@ void run_program(Program& p) {
             }
         }
 
+        if (p.auto_plot && index.contains(telemetry_body)) {
+            const auto& b = p.bodies[static_cast<size_t>(index[telemetry_body])];
+            const double radius = std::sqrt(b.pos[0] * b.pos[0] + b.pos[1] * b.pos[1] + b.pos[2] * b.pos[2]);
+            const double altitude_km = std::max(0.0, radius - 6371000.0) / 1000.0;
+            const double speed = std::sqrt(b.vel[0] * b.vel[0] + b.vel[1] * b.vel[1] + b.vel[2] * b.vel[2]);
+            telemetry_points.push_back({step + 1, altitude_km, speed});
+        }
+
         if (p.verbose) {
             const auto mom = total_momentum(p.bodies);
             const double drift_e = total_energy(p.bodies) - baseline_energy;
@@ -1498,6 +1551,16 @@ void run_program(Program& p) {
         if (req.before_sim) continue;
         if (!index.contains(req.body) || !index.contains(req.center)) continue;
         print_orbital_elements(p.bodies, index[req.body], index[req.center]);
+    }
+
+    if (p.auto_plot) {
+        if (telemetry_points.empty()) {
+            std::cout << "[System] plot on requested, but no telemetry samples found for body " << telemetry_body << ".\n";
+        } else {
+            const std::string svg_path = "artifacts/telemetry_" + safe_file_component(telemetry_body) + ".svg";
+            write_telemetry_svg(svg_path, telemetry_points, telemetry_body);
+            std::cout << "[System] C++ animated SVG written: " << svg_path << "\n";
+        }
     }
 
     if (p.adaptive_on) {
@@ -1595,6 +1658,7 @@ usage:
             return 2;
         }
     }
+
 
     try {
         Program p = parse_gravity(argv[2], strict_mode);
