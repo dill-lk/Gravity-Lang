@@ -34,6 +34,9 @@ cmake --build build -j
 ```bash
 cd build
 ctest --output-on-failure
+
+# Optional: run NASA-reference sanity checks for Earth-Moon and Mercury
+./tools/validate_against_nasa.sh --strict
 ```
 
 ## Binaries
@@ -76,6 +79,49 @@ ctest --output-on-failure
 ./build/gravityc examples/moon_orbit.gravity --emit moon.cpp --strict
 ```
 
+## Writing Gravity-Lang syntax (quick start)
+
+Use this template when writing new `.gravity` scripts:
+
+```gravity
+# 1) Declare bodies
+sphere Earth at [0,0,0][m] mass 5.972e24[kg] radius 6371[km] fixed
+sphere Moon  at [384400,0,0][km] mass 7.348e22[kg] radius 1737[km]
+
+# 2) Set optional properties
+Moon.velocity = [0,1.022,0][km/s]
+
+# 3) Add diagnostics/outputs (optional)
+orbital_elements Moon around Earth
+observe Moon.position to "artifacts/moon.csv" frequency 1
+plot on body Moon
+
+# 4) Run simulation (steps are END-START)
+simulate orbit in 0..240 dt 3600[s] integrator rk45 {
+    grav all
+    print Moon.position
+}
+```
+
+### Core syntax rules
+
+- **Body declarations:** `sphere|probe|rocket Name at [x,y,z][unit] mass M[kg] radius R[unit] [velocity ...] [fixed]`.
+- **Velocity assignment:** `Body.velocity = [vx,vy,vz][m/s|km/s]`.
+- **Gravity rules:** use `grav all` for full N-body pull, or `A pull B, C` for explicit targets.
+- **Simulation loop:** `simulate|orbit <label> in START..END dt VALUE[time_unit] integrator <name> { ... }`.
+- **Orbital diagnostics:** always include a center body: `orbital_elements Body around Center`.
+
+### Adding new code safely
+
+1. Start from an existing example in `examples/` and rename it.
+2. Run strict parser checks first:
+   - `./build/gravity check your_script.gravity --strict`
+3. Then run the simulation:
+   - `./build/gravity run your_script.gravity`
+4. If needed, export data for analysis:
+   - `dump_all to "artifacts/dump.csv" frequency 1`
+   - `observe Body.position to "artifacts/body_pos.csv" frequency 10`
+
 ## Implemented runtime features (ported toward Python parity)
 
 - Object declarations: `sphere`, `probe`, and `rocket`
@@ -97,3 +143,19 @@ ctest --output-on-failure
 - This is an active port from the former Python implementation; unsupported DSL lines are still warned and skipped.
 - Current focus is interpreter capability expansion and compatibility with existing `.gravity` scripts.
 - CI prerelease tags: non-versioned CI publishes unique tags in the form `main-build-YYYYMMDD-HHMMSS-rRUN_NUMBER` to keep each release artifact set separate over time.
+
+
+## Benchmark setup notes
+
+- **Binary systems:** initialize both primaries from their mutual COM, not hardcoded guessed speeds. For separation `r`, use `omega = sqrt(G*(m1+m2)/r^3)`, then `v1 = omega*r*m2/(m1+m2)` and `v2 = omega*r*m1/(m1+m2)` in opposite tangential directions.
+- **MOND galaxy tests:** for deep-MOND circular initialization, seed stars near `v_flat = (G*M*a0)^(1/4)` and then adjust for your chosen radius profile.
+- **Rocket ascent tests:** treat gravity-turn and throttle schedules as trajectory design inputs; reaching orbit generally requires early pitch-over plus enough sustained horizontal burn time.
+
+## Common DSL pitfalls (quick fixes)
+
+- `orbital_elements` requires both body and center: `orbital_elements Moon around Earth`.
+- `simulate/orbit in START..END` uses `(END - START)` as the step count, not elapsed seconds. Total simulated time is `steps * dt`.
+- Extremely large step ranges can overflow internal limits; keep `END - START` within 32-bit integer bounds and use larger `dt` for long spans.
+- `Body.fuel_mass = ...` contributes to total body mass (wet mass = dry/base mass + fuel mass).
+- `grav all` now applies across all declared bodies regardless of where it appears in the script.
+- `plot on` defaults to body `Rocket`; for other names, use `plot on body Name`.

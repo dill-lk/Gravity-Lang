@@ -1,0 +1,12 @@
+# MOND circular-speed sanity check
+# For deep-MOND, asymptotic flat speed is v = (G*M*a0)^(1/4).
+# With M=1e42 kg and a0=1.2e-10 m/s^2, v_flat ~= 112.3 km/s.
+
+sphere GalaxyCore at [0,0,0][m] mass 1e42[kg] radius 1e20[m] fixed
+sphere Star at [2.5e20,0,0][m] mass 1e30[kg] radius 1e9[m]
+Star.velocity = [0,112344,0][m/s]
+
+gravity_model mond a0 1.2e-10[m/s2]
+simulate orbit in 0..400000 dt 1000000000[s] integrator rk45 {
+    GalaxyCore pull Star
+}

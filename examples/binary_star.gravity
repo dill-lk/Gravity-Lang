@@ -1,19 +1,26 @@
 # Binary Star System Simulation
-# Two stars orbiting their common center of mass
+# Two stars orbiting their common center of mass (COM).
 
-# Star A - More massive blue star
-sphere StarA at [-500000,0,0][km] radius 700000[km] mass 2e30[kg]
-StarA.velocity = [0,-15,0][km/s]
+# Chosen masses and separation (5,000,000 km between stars).
+# Circular binary speeds are computed from COM geometry:
+#   omega = sqrt(G*(m1+m2)/r^3)
+#   v1 = omega * r1, v2 = omega * r2 where r1 = r*m2/(m1+m2), r2 = r*m1/(m1+m2)
+# For m1=2e30 kg, m2=1e30 kg, r=5e9 m:
+#   v1 = 66.71 km/s, v2 = 133.42 km/s
 
-# Star B - Less massive red star
-sphere StarB at [500000,0,0][km] radius 500000[km] mass 1e30[kg]
-StarB.velocity = [0,30,0][km/s]
+# Star A - more massive blue star
+sphere StarA at [-2500000,0,0][km] radius 200000[km] mass 2e30[kg]
+StarA.velocity = [0,66.71,0][km/s]
+
+# Star B - less massive red star
+sphere StarB at [2500000,0,0][km] radius 150000[km] mass 1e30[kg]
+StarB.velocity = [0,-133.42,0][km/s]
 
 # Simulate binary orbit
-simulate t in 0..365 step 3600[s] integrator verlet {
+simulate t in 0..10000 step 300[s] integrator leapfrog {
     StarA pull StarB
     StarB pull StarA
-    
+
     print StarA.position
     print StarB.position
 }
