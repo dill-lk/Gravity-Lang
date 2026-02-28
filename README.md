@@ -50,7 +50,7 @@ ctest --output-on-failure
 # Show supported runtime features from the binary
 ./build/gravity list-features
 
-# View CLI banner/help
+# View CLI banner/help (includes ENGINE v3.0 ASCII banner)
 ./build/gravity --help
 ./build/gravityc --help
 
@@ -68,7 +68,7 @@ ctest --output-on-failure
 - Integrators: `euler`, `verlet`, `leapfrog`, `rk4`
 - Gravity rules: `grav all`, `A pull B, C`, and `step_physics(A,B)`
 - Gravity tuning: `gravity_constant`, `gravity_model newtonian|mond|gr_correction`
-- Performance scaling: optional multithreaded force accumulation via `threads N|auto`, `threading min_interactions N`, or `GRAVITY_THREADS` environment variable
+- Performance scaling: optional multithreaded force accumulation via `threads N|auto`, `threading min_interactions N`, or `GRAVITY_THREADS` environment variable (with reused per-thread buffers to reduce allocator overhead)
 - Runtime actions: `thrust`, `friction`, `collisions on`, `monitor energy`, `monitor momentum`, `monitor angular_momentum`, `print ...position|velocity`, `profile on|off`
 - CSV export: `observe Body.position|velocity to "file" frequency N`
 - Orbital diagnostics: `orbital_elements Body around Center`
