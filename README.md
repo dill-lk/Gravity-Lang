@@ -45,7 +45,7 @@ ctest --output-on-failure
 ./build/gravity run examples/moon_orbit.gravity
 
 # Validate/parse script without running physics
-./build/gravity check examples/moon_orbit.gravity
+./build/gravity check examples/moon_orbit.gravity --strict
 
 # Show supported runtime features from the binary
 ./build/gravity list-features
@@ -55,7 +55,7 @@ ctest --output-on-failure
 ./build/gravityc --help
 
 # Emit C++ from a Gravity script
-./build/gravityc examples/moon_orbit.gravity --emit moon.cpp
+./build/gravityc examples/moon_orbit.gravity --emit moon.cpp --strict
 ```
 
 ## Implemented runtime features (ported toward Python parity)

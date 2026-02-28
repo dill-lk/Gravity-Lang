@@ -1,0 +1,4 @@
+# Used to verify strict parser mode
+
+sphere Demo at [0,0,0] mass 1000[kg]
+unknown_directive true

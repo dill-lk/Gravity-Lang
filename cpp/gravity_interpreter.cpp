@@ -231,7 +231,7 @@ void print_orbital_elements(const std::vector<Body>& b, int object_idx, int cent
               << " m, eccentricity=" << e << "\n";
 }
 
-Program parse_gravity(const std::string& script_path) {
+Program parse_gravity(const std::string& script_path, bool strict_mode = false) {
     Program p;
     std::ifstream in(script_path);
     if (!in) throw std::runtime_error("cannot open script: " + script_path);
@@ -260,8 +260,10 @@ Program parse_gravity(const std::string& script_path) {
     bool in_block = false;
     bool has_sim = false;
     std::string line;
+    size_t line_no = 0;
 
     while (std::getline(in, line)) {
+        ++line_no;
         if (const auto hash = line.find('#'); hash != std::string::npos) line = line.substr(0, hash);
         line = trim(line);
         if (line.empty()) continue;
@@ -452,7 +454,8 @@ Program parse_gravity(const std::string& script_path) {
             continue;
         }
 
-        std::cerr << "warning: ignored unsupported line: " << line << "\n";
+        if (strict_mode) throw std::runtime_error("unsupported line " + std::to_string(line_no) + ": " + line);
+        std::cerr << "warning: ignored unsupported line " << line_no << ": " << line << "\n";
     }
 
     if (p.bodies.empty()) throw std::runtime_error("no sphere/probe objects found");
@@ -806,8 +809,8 @@ int main(int argc, char** argv) {
             << "   GRAVITY-LANG INTERPRETER   \n"
             << "==============================\n"
             << "usage:\n"
-            << "  gravity run <script.gravity> [--profile]\n"
-            << "  gravity check <script.gravity>\n"
+            << "  gravity run <script.gravity> [--profile] [--strict]\n"
+            << "  gravity check <script.gravity> [--strict]\n"
             << "  gravity list-features\n"
             << "  gravity --help\n"
             << "  gravity --version\n";
@@ -842,10 +845,13 @@ int main(int argc, char** argv) {
     }
 
     bool force_profile = false;
+    bool strict_mode = false;
     for (int i = 3; i < argc; ++i) {
         const std::string arg = argv[i];
         if (arg == "--profile") {
             force_profile = true;
+        } else if (arg == "--strict") {
+            strict_mode = true;
         } else {
             std::cerr << "error: unknown option for gravity " << command << ": " << arg << "\n";
             return 2;
@@ -853,7 +859,7 @@ int main(int argc, char** argv) {
     }
 
     try {
-        Program p = parse_gravity(argv[2]);
+        Program p = parse_gravity(argv[2], strict_mode);
         if (force_profile) p.profile_on = true;
         if (command == "check") {
             std::cout << "ok: parsed script with " << p.bodies.size() << " bodies, " << p.pulls.size() << " pull rules, "

@@ -19,3 +19,7 @@ add_test(NAME gravity_threaded_three_body COMMAND gravity run ${CMAKE_SOURCE_DIR
 add_test(NAME gravity_help COMMAND gravity --help)
 add_test(NAME gravity_check_moon_orbit COMMAND gravity check ${CMAKE_SOURCE_DIR}/examples/moon_orbit.gravity)
 add_test(NAME gravityc_help COMMAND gravityc --help)
+add_test(NAME gravity_check_strict_fails COMMAND gravity check ${CMAKE_SOURCE_DIR}/examples/strict_validation.gravity --strict)
+set_tests_properties(gravity_check_strict_fails PROPERTIES WILL_FAIL TRUE)
+add_test(NAME gravityc_strict_fails COMMAND gravityc ${CMAKE_SOURCE_DIR}/examples/strict_validation.gravity --emit ${CMAKE_BINARY_DIR}/strict.cpp --strict)
+set_tests_properties(gravityc_strict_fails PROPERTIES WILL_FAIL TRUE)
