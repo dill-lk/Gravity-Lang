@@ -101,6 +101,7 @@ struct Program {
     std::vector<RadiationSpec> radiation_specs;
     std::vector<DetachEvent> detach_events;
     std::vector<OrbitalRequest> orbital_requests;
+    bool grav_all_requested = false;
     std::string integrator = "verlet";
     double friction = 0.0;
     int steps = 0;
@@ -576,6 +577,7 @@ Program parse_gravity(const std::string& script_path, bool strict_mode = false) 
     std::regex thrust_re(R"(^thrust\s+([A-Za-z_]\w*)\s+by\s+(\[[^\]]+\])\[(\w+\/s)\]\s*$)");
     std::regex observe_re(R"obs(^observe\s+([A-Za-z_]\w*)\.(position|velocity)\s+to\s+"([^"]+)"\s+frequency\s+(\d+)\s*$)obs");
     std::regex orbital_re(R"(^orbital_elements\s+([A-Za-z_]\w*)\s+around\s+([A-Za-z_]\w*)\s*$)");
+    std::regex orbital_partial_re(R"(^orbital_elements\s+([A-Za-z_]\w*)\s*$)");
     std::regex step_physics_re(R"(^step_physics\(\s*([A-Za-z_]\w*)\s*,\s*([A-Za-z_]\w*)\s*\)\s*$)");
     std::regex adaptive_re(R"(^adaptive\s+tol\s+([-+0-9.eE]+)\s+min\s+([-+0-9.eE]+)\[(\w+)\]\s+max\s+([-+0-9.eE]+)\[(\w+)\]\s*$)");
     std::regex softening_re(R"(^softening\s+([-+0-9.eE]+)\[(\w+)\]\s*$)");
@@ -657,7 +659,14 @@ Program parse_gravity(const std::string& script_path, bool strict_mode = false) 
         if (std::regex_match(line, m, orbit_re)) {
             const double start = std::stod(m[2]);
             const double stop = std::stod(m[3]);
-            p.steps = std::max(1, static_cast<int>(std::round(stop - start)));
+            const double raw_steps = std::round(stop - start);
+            if (!std::isfinite(raw_steps) || raw_steps < 1.0) {
+                throw std::runtime_error("simulate/orbit range must produce at least 1 step");
+            }
+            if (raw_steps > static_cast<double>(std::numeric_limits<int>::max())) {
+                throw std::runtime_error("simulate/orbit step range is too large; reduce END-START or increase dt");
+            }
+            p.steps = static_cast<int>(raw_steps);
             p.dt = std::stod(m[5]) * unit_scale(m[6]);
             std::regex integrator_re(R"(integrator\s+([A-Za-z_][A-Za-z0-9_]*))");
             std::smatch integrator_match;
@@ -694,11 +703,7 @@ Program parse_gravity(const std::string& script_path, bool strict_mode = false) 
         }
 
         if (std::regex_match(line, m, grav_all_re)) {
-            for (const auto& s : p.bodies) {
-                for (const auto& t : p.bodies) {
-                    if (s.name != t.name) p.pulls.push_back({s.name, t.name});
-                }
-            }
+            p.grav_all_requested = true;
             continue;
         }
 
@@ -767,7 +772,14 @@ Program parse_gravity(const std::string& script_path, bool strict_mode = false) 
         }
 
         if (std::regex_match(line, m, fuel_mass_re)) {
-            for (auto& b : p.bodies) if (b.name == m[1]) { b.fuel_mass = std::max(0.0, std::stod(m[2])); b.is_rocket = true; b.mass += b.fuel_mass; }
+            for (auto& b : p.bodies) {
+                if (b.name == m[1]) {
+                    const double new_fuel = std::max(0.0, std::stod(m[2]));
+                    b.is_rocket = true;
+                    b.mass = std::max(1e-9, b.mass - b.fuel_mass + new_fuel);
+                    b.fuel_mass = new_fuel;
+                }
+            }
             continue;
         }
 
@@ -832,6 +844,10 @@ Program parse_gravity(const std::string& script_path, bool strict_mode = false) 
         if (std::regex_match(line, m, orbital_re)) {
             p.orbital_requests.push_back({m[1], m[2], !has_sim});
             continue;
+        }
+
+        if (std::regex_match(line, m, orbital_partial_re)) {
+            throw std::runtime_error("orbital_elements requires `around CENTER` (e.g. `orbital_elements Moon around Earth`)");
         }
 
         if (std::regex_match(line, m, observe_re)) {
@@ -934,6 +950,14 @@ Program parse_gravity(const std::string& script_path, bool strict_mode = false) 
 
     if (p.bodies.empty()) throw std::runtime_error("no sphere/probe objects found");
     if (has_sim && p.steps <= 0) throw std::runtime_error("no simulate/orbit loop found");
+    if (p.grav_all_requested) {
+        p.pulls.clear();
+        for (const auto& s : p.bodies) {
+            for (const auto& t : p.bodies) {
+                if (s.name != t.name) p.pulls.push_back({s.name, t.name});
+            }
+        }
+    }
     if (has_sim && p.pulls.empty() && p.bodies.size() > 1) {
         for (const auto& s : p.bodies) {
             for (const auto& t : p.bodies) {
