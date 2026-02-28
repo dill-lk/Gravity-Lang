@@ -1,0 +1,54 @@
+# Comprehensive single-script showcase for Gravity-Lang runtime features
+sphere Earth at [0,0,0][m] mass 5.972e24[kg] radius 6371000[m] fixed
+sphere Moon at [384400000,0,0][m] mass 7.342e22[kg] radius 1737400[m] velocity [0,1022,0][m/s]
+rocket Rocket at [0,6371000,0][m] mass 28000[kg] radius 3[m] velocity [0,0,0][m/s]
+probe Stage1 at [0,6371000,0][m] mass 6000[kg] radius 2[m] velocity [0,0,0][m/s] fixed
+probe Sail at [0,7000000,0][m] mass 300[kg] radius 1[m] velocity [0,7600,0][m/s]
+
+grav all
+step_physics(Sail,Earth)
+
+Rocket.dry_mass = 12000[kg]
+Rocket.fuel_mass = 16000[kg]
+Rocket.max_thrust = 7.2e5[N]
+Rocket.burn_rate = 240[kg/s]
+Rocket.isp_sea_level = 282[s]
+Rocket.isp_vacuum = 320[s]
+Rocket.drag_coefficient = 0.35
+Rocket.cross_section = 8[m2]
+Rocket.throttle = 0.9
+throttle Rocket to maintain velocity 1400[m/s]
+gravity_turn Rocket start 10[km] end 80[km] final_pitch 85
+
+radiation_pressure Sail by [0.00005,0,0][m/s2]
+event step 3 thrust Sail by [0,0.5,0][m/s]
+event step 12 detach Stage1 from Rocket
+
+orbital_elements Moon around Earth
+orbital_elements Sail around Earth
+
+observe Rocket.position to "artifacts/rocket_pos.csv" frequency 2
+observe Sail.velocity to "artifacts/sail_vel.csv" frequency 2
+dump_all to "artifacts/all_features_dump.csv" frequency 2
+save "artifacts/all_features_checkpoint.csv" frequency 5
+
+threads auto
+threading min_interactions 1
+profile on
+verbose on
+monitor energy
+monitor momentum
+monitor angular_momentum
+collisions merge
+merge_heat 0.2
+
+adaptive tol 1e-3 min 0.1[s] max 2[s]
+softening 1[m]
+gravity_model mond a0 1.2e-10[m/s2]
+gravity_constant 6.67430e-11
+sensitivity Rocket mass 0.1%
+
+simulate orbit in 0..20 dt 1[s] integrator rk45 {
+}
+
+orbital_elements Rocket around Earth

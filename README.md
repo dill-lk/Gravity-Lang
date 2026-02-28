@@ -14,6 +14,15 @@ cmake --build build -j
 
 ```bash
 ./build/gravity run examples/moon_orbit.gravity
+
+# Run rocket testing demo
+./build/gravity run examples/rocket_testing.gravity
+
+# Run single-file full feature showcase
+./build/gravity run examples/all_features_one.gravity
+
+# Plot altitude/speed telemetry from dump_all CSV
+python tools/telemetry_dashboard.py artifacts/rocket_dump.csv --body Rocket
 ```
 
 ## Test
@@ -34,6 +43,21 @@ ctest --output-on-failure
 # Run a simulation
 ./build/gravity run examples/moon_orbit.gravity
 
+# Run rocket testing demo
+./build/gravity run examples/rocket_testing.gravity
+
+# Run single-file full feature showcase
+./build/gravity run examples/all_features_one.gravity
+
+# Plot altitude/speed telemetry from dump_all CSV
+python tools/telemetry_dashboard.py artifacts/rocket_dump.csv --body Rocket
+
+# Dump all bodies each step to CSV
+./build/gravity run examples/moon_orbit.gravity --dump-all=artifacts/dump_all.csv
+
+# Resume from a saved checkpoint
+./build/gravity run examples/moon_orbit.gravity --resume artifacts/checkpoint.json
+
 # Validate/parse script without running physics
 ./build/gravity check examples/moon_orbit.gravity --strict
 
@@ -50,18 +74,19 @@ ctest --output-on-failure
 
 ## Implemented runtime features (ported toward Python parity)
 
-- Object declarations: `sphere` and `probe`
+- Object declarations: `sphere`, `probe`, and `rocket`
 - Units: `m`, `km`, `s`, `min`, `hour`, `day`, `kg`, `m/s`, `km/s`
 - `radius`, `mass`, `velocity`, and `fixed` parsing
 - Velocity assignment: `Body.velocity = [...]`
 - Simulation loops: `simulate` / `orbit`
-- Integrators: `euler`, `verlet`, `leapfrog`, `rk4`
+- Integrators: `euler`, `verlet`, `leapfrog`, `rk4`, `yoshida4`, `rk45`
 - Gravity rules: `grav all`, `A pull B, C`, and `step_physics(A,B)`
 - Gravity tuning: `gravity_constant`, `gravity_model newtonian|mond|gr_correction`
-- Performance scaling: optional multithreaded force accumulation via `threads N|auto`, `threading min_interactions N`, or `GRAVITY_THREADS` environment variable (with reused per-thread buffers to reduce allocator overhead)
-- Runtime actions: `thrust`, `friction`, `collisions on`, `monitor energy`, `monitor momentum`, `monitor angular_momentum`, `print ...position|velocity`, `profile on|off`
-- CSV export: `observe Body.position|velocity to "file" frequency N`
+- Performance scaling: optional multithreaded force accumulation via `threads N|auto`, `threading min_interactions N`, or `GRAVITY_THREADS` environment variable (with reused per-thread buffers to reduce allocator overhead and a reusable low-contention thread-pool scheduler)
+- Runtime actions: `thrust`, `event step N thrust Body by [...]`, `radiation_pressure Body by [ax,ay,az][m/s2]`, `friction`, `collisions on|off|merge`, `monitor energy`, `monitor momentum`, `monitor angular_momentum`, `verbose on|off`, `save "checkpoint.json" frequency N`, `resume "checkpoint.json"`, `sensitivity Body mass P%`, `merge_heat F`, `print ...position|velocity`, `profile on|off`, plus rocketry fields (`Body.dry_mass`, `Body.fuel_mass`, `Body.burn_rate`, `Body.max_thrust`, `Body.isp_sea_level`, `Body.isp_vacuum`, `Body.drag_coefficient`, `Body.cross_section`, `Body.throttle`, `throttle Body to maintain velocity V[m/s]`, `gravity_turn Body start A[m|km] end B[m|km] final_pitch DEG`) and staging (`event step N detach Stage from Rocket`)
+- CSV export: `observe Body.position|velocity to "file" frequency N`, `dump_all to "file" frequency N`, and CLI `--dump-all[=file]`
 - Orbital diagnostics: `orbital_elements Body around Center`
+- Confidence scores: adaptive runs print `confidence.score=...` based on timestep headroom and energy drift
 
 ## Notes
 
