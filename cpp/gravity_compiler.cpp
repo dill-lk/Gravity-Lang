@@ -10,6 +10,7 @@
 #include <tuple>
 #include <vector>
 #include <cstdlib>
+#include <filesystem>
 
 struct Body {
     std::string name;
@@ -35,6 +36,10 @@ struct Program {
     };
     std::vector<ObserveSpec> observe_specs;
     std::vector<ThrustSpec> step_thrusts;
+    int dump_all_frequency = 0;
+    std::string dump_all_file;
+    bool auto_plot = false;
+    std::string auto_plot_body = "Rocket";
     std::string integrator = "verlet";
     double friction = 0.0;
     int steps = 0;
@@ -69,7 +74,7 @@ static Program parse_gravity(const std::string& script_path, bool strict_mode = 
     std::ifstream in(script_path);
     if (!in) throw std::runtime_error("cannot open script: " + script_path);
 
-    std::regex sphere_head_re(R"(^sphere\s+(\w+)\s+at\s+(\[[^\]]+\])(?:\[(\w+)\])?.*$)");
+    std::regex sphere_head_re(R"(^(sphere|probe|rocket)\s+(\w+)\s+at\s+(\[[^\]]+\])(?:\[(\w+)\])?.*$)");
     std::regex mass_re(R"(mass\s+([-+0-9.eE]+)\[(\w+)\])");
     std::regex velocity_re(R"(velocity\s+(\[[^\]]+\])\[(\w+\/s)\])");
     std::regex velocity_assign_re(R"(^([A-Za-z_]\w*)\.velocity\s*=\s*(\[[^\]]+\])\[(\w+\/s)\]\s*$)");
@@ -80,6 +85,14 @@ static Program parse_gravity(const std::string& script_path, bool strict_mode = 
     std::regex friction_re(R"(^friction\s+([-+0-9.eE]+)\s*$)");
     std::regex thrust_re(R"(^thrust\s+([A-Za-z_]\w*)\s+by\s+(\[[^\]]+\])\[(\w+\/s)\]\s*$)");
     std::regex observe_re(R"obs(^observe\s+([A-Za-z_]\w*)\.position\s+to\s+"([^"]+)"\s+frequency\s+(\d+)\s*$)obs");
+    std::regex dump_all_re(R"obs(^dump_all\s+to\s+"([^"]+)"\s+frequency\s+(\d+)\s*$)obs");
+    std::regex plot_re(R"(^plot\s+(on|off)(?:\s+body\s+([A-Za-z_]\w*))?\s*$)");
+    std::regex verbose_re(R"(^verbose\s+(on|off)\s*$)");
+    std::regex merge_heat_re(R"(^merge_heat\s+([-+0-9.eE]+)\s*$)");
+    std::regex throttle_target_re(R"(^throttle\s+([A-Za-z_]\w*)\s+to\s+maintain\s+velocity\s+([-+0-9.eE]+)\[(m\/s)\]\s*$)");
+    std::regex gravity_turn_re(R"(^gravity_turn\s+([A-Za-z_]\w*)\s+start\s+([-+0-9.eE]+)\[(m|km)\]\s+end\s+([-+0-9.eE]+)\[(m|km)\]\s+final_pitch\s+([-+0-9.eE]+)\s*$)");
+    std::regex detach_event_re(R"(^event\s+step\s+(\d+)\s+detach\s+([A-Za-z_]\w*)\s+from\s+([A-Za-z_]\w*)\s*$)");
+    std::regex rocket_assign_re(R"(^([A-Za-z_]\w*)\.(dry_mass|fuel_mass|burn_rate|max_thrust|isp_sea_level|isp_vacuum|drag_coefficient|cross_section|throttle)\s*=.*$)");
 
     bool in_block = false;
     std::string line;
@@ -93,8 +106,8 @@ static Program parse_gravity(const std::string& script_path, bool strict_mode = 
         std::smatch m;
         if (std::regex_match(line, m, sphere_head_re)) {
             Body b;
-            b.name = m[1];
-            b.pos = parse_vec(m[2], m[3].matched ? m[3].str() : "m");
+            b.name = m[2];
+            b.pos = parse_vec(m[3], m[4].matched ? m[4].str() : "m");
 
             std::smatch mass_match;
             if (!std::regex_search(line, mass_match, mass_re)) {
@@ -186,12 +199,33 @@ static Program parse_gravity(const std::string& script_path, bool strict_mode = 
             continue;
         }
 
+        if (std::regex_match(line, m, dump_all_re)) {
+            p.dump_all_file = m[1];
+            p.dump_all_frequency = std::max(1, std::stoi(m[2]));
+            continue;
+        }
+
+        if (std::regex_match(line, m, plot_re)) {
+            p.auto_plot = (m[1] == "on");
+            if (m[2].matched) p.auto_plot_body = m[2];
+            continue;
+        }
+
         if (in_block && std::regex_match(line, m, observe_re)) {
             Program::ObserveSpec obs;
             obs.name = m[1];
             obs.output_file = m[2];
             obs.frequency = std::max(1, std::stoi(m[3]));
             p.observe_specs.push_back(obs);
+            continue;
+        }
+
+        if (std::regex_match(line, m, verbose_re) ||
+            std::regex_match(line, m, merge_heat_re) ||
+            std::regex_match(line, m, throttle_target_re) ||
+            std::regex_match(line, m, gravity_turn_re) ||
+            std::regex_match(line, m, detach_event_re) ||
+            std::regex_match(line, m, rocket_assign_re)) {
             continue;
         }
 
@@ -212,7 +246,7 @@ static Program parse_gravity(const std::string& script_path, bool strict_mode = 
 
 static std::string emit_cpp(const Program& p) {
     std::ostringstream out;
-    out << "#include <cmath>\n#include <fstream>\n#include <iostream>\n#include <string>\n#include <unordered_map>\n#include <vector>\n#include <array>\n"
+    out << "#include <cmath>\n#include <fstream>\n#include <iostream>\n#include <string>\n#include <unordered_map>\n#include <vector>\n#include <array>\n#include <filesystem>\n"
         << "struct Body{std::string n;double px,py,pz,vx,vy,vz,m;bool f;};\n"
         << "int main(){const double G=6.67430e-11;std::vector<Body>b={\n";
     for (const auto& body : p.bodies) {
@@ -221,13 +255,18 @@ static std::string emit_cpp(const Program& p) {
             << "," << (body.fixed ? "true" : "false") << "},\n";
     }
     out << "};std::unordered_map<std::string,int>ix;for(int i=0;i<(int)b.size();++i)ix[b[i].n]=i;\n";
+    out << "auto ensure_parent_dir=[&](const std::string& p){auto parent=std::filesystem::path(p).parent_path();if(!parent.empty())std::filesystem::create_directories(parent);};\n";
     out << "std::vector<std::pair<int,int>>pulls={";
     for (const auto& pr : p.pulls) out << "{" << "ix[\"" << pr.first << "\"],ix[\"" << pr.second << "\"]},";
     out << "};\n";
 
     for (size_t i = 0; i < p.observe_specs.size(); ++i) {
         const auto& obs = p.observe_specs[i];
-        out << "std::ofstream obs" << i << "(\"" << obs.output_file << "\");obs" << i << "<<\"step,x,y,z\\n\";\n";
+        out << "ensure_parent_dir(\"" << obs.output_file << "\");std::ofstream obs" << i << "(\"" << obs.output_file << "\");obs" << i << "<<\"step,x,y,z\\n\";\n";
+    }
+
+    if (p.dump_all_frequency > 0 && !p.dump_all_file.empty()) {
+        out << "ensure_parent_dir(\"" << p.dump_all_file << "\");std::ofstream dump_all(\"" << p.dump_all_file << "\");dump_all<<\"step,body,x,y,z,vx,vy,vz\\n\";\n";
     }
 
     out << "auto compute_acc=[&](const std::vector<Body>&state){std::vector<std::array<double,3>>a(state.size(),{0,0,0});"
@@ -281,7 +320,17 @@ static std::string emit_cpp(const Program& p) {
             << "obs" << i << "<<(step+1)<<\",\"<<o.px<<\",\"<<o.py<<\",\"<<o.pz<<\"\\n\";}\n";
     }
 
-    out << "}\nreturn 0;}\n";
+    if (p.dump_all_frequency > 0 && !p.dump_all_file.empty()) {
+        out << "if((step+1)%" << p.dump_all_frequency << "==0){for(const auto&o:b){dump_all<<(step+1)<<\",\"<<o.n<<\",\"<<o.px<<\",\"<<o.py<<\",\"<<o.pz<<\",\"<<o.vx<<\",\"<<o.vy<<\",\"<<o.vz<<\"\\n\";}}\n";
+    }
+
+    out << "}\n";
+    if (p.auto_plot && p.dump_all_frequency > 0 && !p.dump_all_file.empty()) {
+        out << "std::cout<<\"\\n[System] Simulation complete. Launching telemetry dashboard...\\n\";"
+            << "std::system(\"python3 tools/telemetry_dashboard.py \\\"" << p.dump_all_file << "\\\" --body \\\"" << p.auto_plot_body
+            << "\\\" || python tools/telemetry_dashboard.py \\\"" << p.dump_all_file << "\\\" --body \\\"" << p.auto_plot_body << "\\\"\");\n";
+    }
+    out << "return 0;}\n";
     return out.str();
 }
 

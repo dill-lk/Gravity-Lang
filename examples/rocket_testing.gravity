@@ -21,6 +21,7 @@ merge_heat 0.3
 event step 120 detach Stage1 from Rocket
 
 dump_all to "artifacts/rocket_dump.csv" frequency 20
+plot on
 verbose on
 simulate orbit in 0..200 dt 1[s] integrator rk45 {
 }

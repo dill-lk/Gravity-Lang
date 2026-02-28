@@ -12,6 +12,7 @@
 #include <memory>
 #include <regex>
 #include <functional>
+#include <filesystem>
 #include <mutex>
 #include <sstream>
 #include <stdexcept>
@@ -124,6 +125,8 @@ struct Program {
     bool verbose = false;
     int dump_all_frequency = 0;
     std::string dump_all_file;
+    bool auto_plot = false;
+    std::string auto_plot_body = "Rocket";
     int checkpoint_frequency = 0;
     std::string checkpoint_file;
     std::string resume_file;
@@ -136,6 +139,26 @@ std::string trim(std::string s) {
     s.erase(s.begin(), std::find_if(s.begin(), s.end(), [](unsigned char ch) { return !std::isspace(ch); }));
     s.erase(std::find_if(s.rbegin(), s.rend(), [](unsigned char ch) { return !std::isspace(ch); }).base(), s.end());
     return s;
+}
+
+
+void ensure_parent_directory(const std::string& file_path) {
+    const std::filesystem::path out_path(file_path);
+    const auto parent = out_path.parent_path();
+    if (parent.empty()) return;
+    std::error_code ec;
+    std::filesystem::create_directories(parent, ec);
+    if (ec) throw std::runtime_error("failed to create output directory: " + parent.string());
+}
+
+std::string shell_quote(const std::string& value) {
+    std::string quoted = "\"";
+    for (char ch : value) {
+        if (ch == '\\' || ch == '"') quoted.push_back('\\');
+        quoted.push_back(ch);
+    }
+    quoted.push_back('"');
+    return quoted;
 }
 
 double unit_scale(const std::string& unit) {
@@ -341,6 +364,7 @@ void print_orbital_elements(const std::vector<Body>& b, int object_idx, int cent
 }
 
 void save_checkpoint(const std::vector<Body>& bodies, const std::string& path, int step, double dt) {
+    ensure_parent_directory(path);
     std::ofstream out(path);
     if (!out) throw std::runtime_error("failed to open checkpoint output: " + path);
     out << "# gravity checkpoint\n";
@@ -501,6 +525,7 @@ Program parse_gravity(const std::string& script_path, bool strict_mode = false) 
     std::regex profile_re(R"(^profile\s+(on|off)\s*$)");
     std::regex collisions_mode_re(R"(^collisions\s+(on|off|merge)\s*$)");
     std::regex dump_all_re(R"obs(^dump_all\s+to\s+"([^"]+)"\s+frequency\s+(\d+)\s*$)obs");
+    std::regex plot_re(R"(^plot\s+(on|off)(?:\s+body\s+([A-Za-z_]\w*))?\s*$)");
     std::regex event_thrust_re(R"(^event\s+step\s+(\d+)\s+thrust\s+([A-Za-z_]\w*)\s+by\s+(\[[^\]]+\])\[(\w+\/s)\]\s*$)");
     std::regex radiation_re(R"(^radiation_pressure\s+([A-Za-z_]\w*)\s+by\s+(\[[^\]]+\])\[(m\/s2)\]\s*$)");
     std::regex verbose_re(R"(^verbose\s+(on|off)\s*$)");
@@ -638,6 +663,12 @@ Program parse_gravity(const std::string& script_path, bool strict_mode = false) 
         if (std::regex_match(line, m, dump_all_re)) {
             p.dump_all_file = m[1];
             p.dump_all_frequency = std::max(1, std::stoi(m[2]));
+            continue;
+        }
+
+        if (std::regex_match(line, m, plot_re)) {
+            p.auto_plot = (m[1] == "on");
+            if (m[2].matched) p.auto_plot_body = m[2];
             continue;
         }
 
@@ -1033,6 +1064,7 @@ void run_program(Program& p) {
     std::ofstream dump_all_file;
     observe_files.reserve(p.observe_specs.size());
     for (const auto& obs : p.observe_specs) {
+        ensure_parent_directory(obs.output_file);
         observe_files.emplace_back(obs.output_file);
         if (!observe_files.back()) throw std::runtime_error("failed to open observe output: " + obs.output_file);
         observe_files.back() << "step,x,y,z\n";
@@ -1040,6 +1072,7 @@ void run_program(Program& p) {
 
     if (p.dump_all_frequency > 0) {
         if (p.dump_all_file.empty()) p.dump_all_file = "artifacts/dump_all.csv";
+        ensure_parent_directory(p.dump_all_file);
         dump_all_file.open(p.dump_all_file);
         if (!dump_all_file) throw std::runtime_error("failed to open dump_all output: " + p.dump_all_file);
         dump_all_file << "step,body,x,y,z,vx,vy,vz\n";
@@ -1529,7 +1562,7 @@ usage:
         std::cout << "integrators: euler, verlet, leapfrog, rk4, yoshida4, rk45\n";
         std::cout << "gravity models: newtonian, mond, gr_correction\n";
         std::cout << "threading: threads auto|N, threading min_interactions N, GRAVITY_THREADS (thread-pool force accumulation)\n";
-        std::cout << "diagnostics: monitor energy|momentum|angular_momentum, orbital_elements, verbose, sensitivity, merge_heat, confidence.score, profile on|off\n";
+        std::cout << "diagnostics: monitor energy|momentum|angular_momentum, orbital_elements, verbose, sensitivity, merge_heat, confidence.score, profile on|off, plot on|off [body Name]\n";
         std::cout << "rocketry: variable mass burn, gravity turn autopilot, variable ISP, atmospheric drag, PID throttle target, step detach staging\n";
         return 0;
     }
@@ -1577,6 +1610,15 @@ usage:
             return 0;
         }
         run_program(p);
+        if (p.auto_plot && p.dump_all_frequency > 0 && !p.dump_all_file.empty()) {
+            std::cout << "\n[System] Simulation complete. Launching telemetry dashboard...\n";
+            const std::string command = "python3 tools/telemetry_dashboard.py " + shell_quote(p.dump_all_file) + " --body " + shell_quote(p.auto_plot_body);
+            const int plot_rc = std::system(command.c_str());
+            if (plot_rc != 0) {
+                const std::string fallback = "python tools/telemetry_dashboard.py " + shell_quote(p.dump_all_file) + " --body " + shell_quote(p.auto_plot_body);
+                std::system(fallback.c_str());
+            }
+        }
     } catch (const std::exception& ex) {
         std::cerr << "error: " << ex.what() << "\n";
         return 1;
