@@ -84,7 +84,7 @@ python tools/telemetry_dashboard.py artifacts/rocket_dump.csv --body Rocket
 - Gravity tuning: `gravity_constant`, `gravity_model newtonian|mond|gr_correction`
 - Performance scaling: optional multithreaded force accumulation via `threads N|auto`, `threading min_interactions N`, or `GRAVITY_THREADS` environment variable (with reused per-thread buffers to reduce allocator overhead and a reusable low-contention thread-pool scheduler)
 - Runtime actions: `thrust`, `event step N thrust Body by [...]`, `radiation_pressure Body by [ax,ay,az][m/s2]`, `friction`, `collisions on|off|merge`, `monitor energy`, `monitor momentum`, `monitor angular_momentum`, `verbose on|off`, `save "checkpoint.json" frequency N`, `resume "checkpoint.json"`, `sensitivity Body mass P%`, `merge_heat F`, `print ...position|velocity`, `profile on|off`, plus rocketry fields (`Body.dry_mass`, `Body.fuel_mass`, `Body.burn_rate`, `Body.max_thrust`, `Body.isp_sea_level`, `Body.isp_vacuum`, `Body.drag_coefficient`, `Body.cross_section`, `Body.throttle`, `throttle Body to maintain velocity V[m/s]`, `gravity_turn Body start A[m|km] end B[m|km] final_pitch DEG`) and staging (`event step N detach Stage from Rocket`)
-- CSV export: `observe Body.position|velocity to "file" frequency N`, `dump_all to "file" frequency N`, and CLI `--dump-all[=file]`
+- CSV export: `observe Body.position|velocity to "file" frequency N`, `dump_all to "file" frequency N`, DSL auto-dashboard hook `plot on [body Name]`, and CLI `--dump-all[=file]` (output folders are auto-created if missing)
 - Orbital diagnostics: `orbital_elements Body around Center`
 - Confidence scores: adaptive runs print `confidence.score=...` based on timestep headroom and energy drift
 
