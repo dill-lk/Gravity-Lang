@@ -1674,6 +1674,15 @@ usage:
             return 0;
         }
         run_program(p);
+        if (p.auto_plot && p.dump_all_frequency > 0 && !p.dump_all_file.empty()) {
+            std::cout << "\n[System] Simulation complete. Launching telemetry dashboard...\n";
+            const std::string command = "python3 tools/telemetry_dashboard.py " + shell_quote(p.dump_all_file) + " --body " + shell_quote(p.auto_plot_body);
+            const int plot_rc = std::system(command.c_str());
+            if (plot_rc != 0) {
+                const std::string fallback = "python tools/telemetry_dashboard.py " + shell_quote(p.dump_all_file) + " --body " + shell_quote(p.auto_plot_body);
+                std::system(fallback.c_str());
+            }
+        }
     } catch (const std::exception& ex) {
         std::cerr << "error: " << ex.what() << "\n";
         return 1;
