@@ -1,0 +1,14 @@
+# Demonstrates threaded force accumulation
+sphere A at [0,0,0][m] mass 1.0e12[kg] radius 1[m] fixed
+sphere B at [1000,0,0][m] mass 1.0e8[kg] radius 1[m]
+sphere C at [0,1000,0][m] mass 1.0e8[kg] radius 1[m]
+
+threads auto
+threading min_interactions 2
+profile on
+grav all
+
+simulate t in 0..5 step 1[s] integrator verlet {
+    print B.position
+    print C.position
+}

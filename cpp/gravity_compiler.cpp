@@ -64,7 +64,7 @@ static std::array<double, 3> parse_vec(const std::string& value, const std::stri
     return {std::stod(m[1]) * s, std::stod(m[2]) * s, std::stod(m[3]) * s};
 }
 
-static Program parse_gravity(const std::string& script_path) {
+static Program parse_gravity(const std::string& script_path, bool strict_mode = false) {
     Program p;
     std::ifstream in(script_path);
     if (!in) throw std::runtime_error("cannot open script: " + script_path);
@@ -83,7 +83,9 @@ static Program parse_gravity(const std::string& script_path) {
 
     bool in_block = false;
     std::string line;
+    size_t line_no = 0;
     while (std::getline(in, line)) {
+        ++line_no;
         if (const auto hash = line.find('#'); hash != std::string::npos) line = line.substr(0, hash);
         line = trim(line);
         if (line.empty()) continue;
@@ -192,6 +194,8 @@ static Program parse_gravity(const std::string& script_path) {
             p.observe_specs.push_back(obs);
             continue;
         }
+
+        if (strict_mode) throw std::runtime_error("unsupported line " + std::to_string(line_no) + ": " + line);
     }
 
     if (p.steps <= 0) throw std::runtime_error("no orbit/simulate loop found");
@@ -282,9 +286,31 @@ static std::string emit_cpp(const Program& p) {
 }
 
 int main(int argc, char** argv) {
-    if (argc < 4) {
-        std::cerr << "usage: gravityc <script.gravity> --emit <out.cpp> [--build <exe>] [--run] [--cxx <compiler>]\\n";
+    auto print_help = []() {
+        std::cout
+            << "==============================\n"
+            << "    GRAVITY-LANG C++ EMITTER  \n"
+            << "==============================\n"
+            << "usage:\n"
+            << "  gravityc <script.gravity> --emit <out.cpp> [--build <exe>] [--run] [--cxx <compiler>] [--strict]\n"
+            << "  gravityc --help\n"
+            << "  gravityc --version\n";
+    };
+
+    if (argc < 2) {
+        print_help();
+        std::cout << "\nTip: use `gravityc <script.gravity> --emit out.cpp` to generate C++.\n";
         return 2;
+    }
+
+    const std::string first = argv[1];
+    if (first == "--help" || first == "-h" || first == "help") {
+        print_help();
+        return 0;
+    }
+    if (first == "--version" || first == "version") {
+        std::cout << "gravityc 0.2.0\n";
+        return 0;
     }
 
     std::string script = argv[1];
@@ -292,6 +318,7 @@ int main(int argc, char** argv) {
     std::string build;
     std::string cxx = "g++";
     bool run_output = false;
+    bool strict_mode = false;
 
     for (int i = 2; i < argc; ++i) {
         std::string arg = argv[i];
@@ -299,16 +326,24 @@ int main(int argc, char** argv) {
         else if (arg == "--build" && i + 1 < argc) build = argv[++i];
         else if (arg == "--run") run_output = true;
         else if (arg == "--cxx" && i + 1 < argc) cxx = argv[++i];
+        else if (arg == "--strict") strict_mode = true;
+        else {
+            std::cerr << "error: unknown option: " << arg << "\n";
+            print_help();
+            return 2;
+        }
     }
 
     if (emit.empty()) {
-        std::cerr << "--emit is required\n";
+        std::cerr << "error: --emit is required\n";
+        print_help();
         return 2;
     }
 
     try {
-        Program p = parse_gravity(script);
+        Program p = parse_gravity(script, strict_mode);
         std::ofstream out(emit);
+        if (!out) throw std::runtime_error("cannot open output file: " + emit);
         out << emit_cpp(p);
         out.close();
 
