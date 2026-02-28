@@ -282,9 +282,31 @@ static std::string emit_cpp(const Program& p) {
 }
 
 int main(int argc, char** argv) {
-    if (argc < 4) {
-        std::cerr << "usage: gravityc <script.gravity> --emit <out.cpp> [--build <exe>] [--run] [--cxx <compiler>]\\n";
+    auto print_help = []() {
+        std::cout
+            << "==============================\n"
+            << "    GRAVITY-LANG C++ EMITTER  \n"
+            << "==============================\n"
+            << "usage:\n"
+            << "  gravityc <script.gravity> --emit <out.cpp> [--build <exe>] [--run] [--cxx <compiler>]\n"
+            << "  gravityc --help\n"
+            << "  gravityc --version\n";
+    };
+
+    if (argc < 2) {
+        print_help();
+        std::cout << "\nTip: use `gravityc <script.gravity> --emit out.cpp` to generate C++.\n";
         return 2;
+    }
+
+    const std::string first = argv[1];
+    if (first == "--help" || first == "-h" || first == "help") {
+        print_help();
+        return 0;
+    }
+    if (first == "--version" || first == "version") {
+        std::cout << "gravityc 0.2.0\n";
+        return 0;
     }
 
     std::string script = argv[1];
@@ -299,16 +321,23 @@ int main(int argc, char** argv) {
         else if (arg == "--build" && i + 1 < argc) build = argv[++i];
         else if (arg == "--run") run_output = true;
         else if (arg == "--cxx" && i + 1 < argc) cxx = argv[++i];
+        else {
+            std::cerr << "error: unknown option: " << arg << "\n";
+            print_help();
+            return 2;
+        }
     }
 
     if (emit.empty()) {
-        std::cerr << "--emit is required\n";
+        std::cerr << "error: --emit is required\n";
+        print_help();
         return 2;
     }
 
     try {
         Program p = parse_gravity(script);
         std::ofstream out(emit);
+        if (!out) throw std::runtime_error("cannot open output file: " + emit);
         out << emit_cpp(p);
         out.close();
 
