@@ -126,6 +126,7 @@ struct Program {
     int dump_all_frequency = 0;
     std::string dump_all_file;
     bool auto_plot = false;
+    bool plot_explicitly_set = false;
     std::string auto_plot_body = "Rocket";
     int checkpoint_frequency = 0;
     std::string checkpoint_file;
@@ -727,6 +728,7 @@ Program parse_gravity(const std::string& script_path, bool strict_mode = false) 
         }
 
         if (std::regex_match(line, m, plot_re)) {
+            p.plot_explicitly_set = true;
             p.auto_plot = (m[1] == "on");
             if (m[2].matched) p.auto_plot_body = m[2];
             continue;
@@ -947,6 +949,9 @@ Program parse_gravity(const std::string& script_path, bool strict_mode = false) 
         if (!body.fixed && !affected) {
             std::cerr << "warning: body " << body.name << " has no pull rules targeting it and may drift linearly\n";
         }
+    }
+    if (!p.plot_explicitly_set && p.dump_all_frequency > 0) {
+        p.auto_plot = true;
     }
     return p;
 }
@@ -1580,6 +1585,8 @@ void run_program(Program& p) {
             write_telemetry_svg(svg_path, telemetry_points, telemetry_body);
             std::cout << "[System] C++ animated SVG written: " << svg_path << "\n";
         }
+    } else if (p.plot_explicitly_set && p.dump_all_frequency > 0 && !p.dump_all_file.empty()) {
+        std::cout << "[System] dump_all wrote CSV only because `plot off` is set. Use `plot on` to generate animated SVG telemetry.\n";
     }
 
     if (p.adaptive_on) {
@@ -1685,6 +1692,7 @@ usage:
         if (cli_dump_all) {
             p.dump_all_frequency = 1;
             p.dump_all_file = cli_dump_all_file.empty() ? "artifacts/dump_all.csv" : cli_dump_all_file;
+            if (!p.plot_explicitly_set) p.auto_plot = true;
         }
         if (!cli_resume_file.empty()) p.resume_file = cli_resume_file;
         if (command == "check") {
@@ -1693,7 +1701,7 @@ usage:
             return 0;
         }
         run_program(p);
-        if (p.auto_plot && p.dump_all_frequency > 0 && !p.dump_all_file.empty()) {
+        if (p.plot_explicitly_set && p.auto_plot && p.dump_all_frequency > 0 && !p.dump_all_file.empty()) {
             std::cout << "\n[System] Simulation complete. Launching telemetry dashboard...\n";
             const std::string command = "python3 tools/telemetry_dashboard.py " + shell_quote(p.dump_all_file) + " --body " + shell_quote(p.auto_plot_body);
             const int plot_rc = std::system(command.c_str());
