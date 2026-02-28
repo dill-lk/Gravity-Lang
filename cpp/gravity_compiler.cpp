@@ -309,7 +309,7 @@ int main(int argc, char** argv) {
         return 0;
     }
     if (first == "--version" || first == "version") {
-        std::cout << "gravityc 0.2.0\n";
+        std::cout << "gravityc ENGINE v3.0 emitter build " << __DATE__ << " " << __TIME__ << "\n";
         return 0;
     }
 

@@ -67,3 +67,4 @@ ctest --output-on-failure
 
 - This is an active port from the former Python implementation; unsupported DSL lines are still warned and skipped.
 - Current focus is interpreter capability expansion and compatibility with existing `.gravity` scripts.
+- CI prerelease tags: non-versioned CI publishes unique tags in the form `main-build-YYYYMMDD-HHMMSS-rRUN_NUMBER` to keep each release artifact set separate over time.

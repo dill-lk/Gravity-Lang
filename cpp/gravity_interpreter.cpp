@@ -839,8 +839,9 @@ int main(int argc, char** argv) {
 /____/         ENGINE v3.0 [C++ NATIVE]    /____/  
 
  » Accuracy: 99.2% (NASA-Ref) | Mode: High-Precision (long double)
- » System: Cross-platform Native C++ | Build: 2026.02.28
- » "For Students, By a Yaka Labs"
+)HELP";
+        std::cout << " » System: Cross-platform Native C++ | Build: " << __DATE__ << " " << __TIME__ << "\n";
+        std::cout << R"HELP( » "For Students, By a Yaka Labs"
 
 usage:
   gravity run <script.gravity> [--profile] [--strict]
@@ -850,6 +851,7 @@ usage:
   gravity --version
 )HELP";
     };
+
     if (argc < 2) {
         print_help();
         std::cout << "\nTip: use `gravity run <script.gravity>` to execute a simulation.\n";
@@ -862,7 +864,7 @@ usage:
         return 0;
     }
     if (command == "--version" || command == "version") {
-        std::cout << "gravity ENGINE v3.0 [C++ NATIVE]\n";
+        std::cout << "gravity ENGINE v3.0 [C++ NATIVE] build " << __DATE__ << " " << __TIME__ << "\n";
         return 0;
     }
     if (command == "list-features") {
