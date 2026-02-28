@@ -160,8 +160,10 @@ jobs:
             echo "prerelease=false" >> "$GITHUB_OUTPUT"
             echo "make_latest=true" >> "$GITHUB_OUTPUT"
           else
-            echo "tag=main-build" >> "$GITHUB_OUTPUT"
-            echo "name=Gravity-Lang Main Build" >> "$GITHUB_OUTPUT"
+            TS="$(date -u +%Y%m%d-%H%M%S)"
+            UNIQUE_TAG="main-build-${TS}-r${GITHUB_RUN_NUMBER}"
+            echo "tag=${UNIQUE_TAG}" >> "$GITHUB_OUTPUT"
+            echo "name=Gravity-Lang Main Build ${TS}" >> "$GITHUB_OUTPUT"
             echo "prerelease=true" >> "$GITHUB_OUTPUT"
             echo "make_latest=false" >> "$GITHUB_OUTPUT"
           fi
