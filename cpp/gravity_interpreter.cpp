@@ -141,6 +141,25 @@ std::string trim(std::string s) {
     return s;
 }
 
+std::string shell_quote(const std::string& value) {
+#ifdef _WIN32
+    std::string escaped = "\"";
+    for (char ch : value) {
+        if (ch == '"') escaped += "\\\"";
+        else escaped += ch;
+    }
+    escaped += "\"";
+    return escaped;
+#else
+    std::string escaped = "'";
+    for (char ch : value) {
+        if (ch == '\'') escaped += "'\\''";
+        else escaped += ch;
+    }
+    escaped += "'";
+    return escaped;
+#endif
+}
 
 void ensure_parent_directory(const std::string& file_path) {
     const std::filesystem::path out_path(file_path);

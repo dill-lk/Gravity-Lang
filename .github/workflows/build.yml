@@ -114,6 +114,47 @@ jobs:
           Copy-Item "${{ matrix.bin_path }}" "dist/${{ matrix.exe_name }}.exe"
           Copy-Item "${{ matrix.compiler_path }}" "dist/gravityc-${{ runner.os }}.exe"
 
+      - name: Generate checksums (POSIX)
+        if: runner.os != 'Windows'
+        run: |
+          cd dist
+          : > SHA256SUMS.txt
+          for file in *; do
+            [ -f "$file" ] || continue
+            [ "$file" = "SHA256SUMS.txt" ] && continue
+            cmake -E sha256sum "$file" >> SHA256SUMS.txt
+          done
+
+      - name: Generate checksums and optional signature report (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $dist = Resolve-Path dist
+          $exeFiles = Get-ChildItem -Path $dist -Filter *.exe
+          New-Item -Path "$dist/SHA256SUMS.txt" -ItemType File -Force | Out-Null
+
+          foreach ($exe in $exeFiles) {
+            $hash = Get-FileHash -Algorithm SHA256 -Path $exe.FullName
+            "$($hash.Hash) *$($exe.Name)" | Out-File -Append -Encoding ascii -FilePath "$dist/SHA256SUMS.txt"
+
+            if (Get-Command Get-AuthenticodeSignature -ErrorAction SilentlyContinue) {
+              $signature = Get-AuthenticodeSignature -FilePath $exe.FullName
+              $signerSubject = if ($null -ne $signature.SignerCertificate) { $signature.SignerCertificate.Subject } else { "" }
+              @(
+                "file=$($exe.Name)",
+                "status=$($signature.Status)",
+                "status_message=$($signature.StatusMessage)",
+                "signer_subject=$signerSubject"
+              ) | Out-File -Encoding utf8 -FilePath "$dist/$($exe.BaseName).signature.txt"
+            } else {
+              @(
+                "file=$($exe.Name)",
+                "status=Unknown",
+                "status_message=Get-AuthenticodeSignature is not available on this runner"
+              ) | Out-File -Encoding utf8 -FilePath "$dist/$($exe.BaseName).signature.txt"
+            }
+          }
+
       - name: Upload runtime artifact
         uses: actions/upload-artifact@v4
         with:
@@ -125,6 +166,15 @@ jobs:
         with:
           name: gravityc-${{ matrix.os }}
           path: dist/gravityc-${{ runner.os }}*
+
+      - name: Upload verification metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: verification-${{ matrix.os }}
+          path: |
+            dist/SHA256SUMS.txt
+            dist/*.signature.txt
+          if-no-files-found: warn
 
   release:
     name: Publish GitHub Release
