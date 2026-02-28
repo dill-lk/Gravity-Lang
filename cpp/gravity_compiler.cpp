@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cmath>
 #include <fstream>
 #include <iostream>
@@ -10,7 +11,7 @@
 #include <tuple>
 #include <vector>
 #include <cstdlib>
-
+#include <filesystem>
 struct Body {
     std::string name;
     std::array<double, 3> pos{0, 0, 0};
@@ -18,7 +19,6 @@ struct Body {
     double mass = 0.0;
     bool fixed = false;
 };
-
 struct Program {
     std::vector<Body> bodies;
     std::vector<std::pair<std::string, std::string>> pulls;
@@ -35,18 +35,20 @@ struct Program {
     };
     std::vector<ObserveSpec> observe_specs;
     std::vector<ThrustSpec> step_thrusts;
+    int dump_all_frequency = 0;
+    std::string dump_all_file;
+    bool auto_plot = false;
+    std::string auto_plot_body = "Rocket";
     std::string integrator = "verlet";
     double friction = 0.0;
     int steps = 0;
     double dt = 1.0;
 };
-
 static inline std::string trim(std::string s) {
     s.erase(s.begin(), std::find_if(s.begin(), s.end(), [](unsigned char ch) { return !std::isspace(ch); }));
     s.erase(std::find_if(s.rbegin(), s.rend(), [](unsigned char ch) { return !std::isspace(ch); }).base(), s.end());
     return s;
 }
-
 static double unit_scale(const std::string& unit) {
     if (unit == "m" || unit == "m/s" || unit == "kg" || unit == "s") return 1.0;
     if (unit == "km" || unit == "km/s") return 1000.0;
@@ -55,7 +57,6 @@ static double unit_scale(const std::string& unit) {
     if (unit == "day" || unit == "days") return 86400.0;
     return 1.0;
 }
-
 static std::array<double, 3> parse_vec(const std::string& value, const std::string& unit) {
     std::regex v(R"(\[\s*([-+0-9.eE]+)\s*,\s*([-+0-9.eE]+)\s*,\s*([-+0-9.eE]+)\s*\])");
     std::smatch m;
@@ -63,13 +64,11 @@ static std::array<double, 3> parse_vec(const std::string& value, const std::stri
     const double s = unit_scale(unit);
     return {std::stod(m[1]) * s, std::stod(m[2]) * s, std::stod(m[3]) * s};
 }
-
 static Program parse_gravity(const std::string& script_path, bool strict_mode = false) {
     Program p;
     std::ifstream in(script_path);
     if (!in) throw std::runtime_error("cannot open script: " + script_path);
-
-    std::regex sphere_head_re(R"(^sphere\s+(\w+)\s+at\s+(\[[^\]]+\])(?:\[(\w+)\])?.*$)");
+    std::regex sphere_head_re(R"(^(sphere|probe|rocket)\s+(\w+)\s+at\s+(\[[^\]]+\])(?:\[(\w+)\])?.*$)");
     std::regex mass_re(R"(mass\s+([-+0-9.eE]+)\[(\w+)\])");
     std::regex velocity_re(R"(velocity\s+(\[[^\]]+\])\[(\w+\/s)\])");
     std::regex velocity_assign_re(R"(^([A-Za-z_]\w*)\.velocity\s*=\s*(\[[^\]]+\])\[(\w+\/s)\]\s*$)");
@@ -80,7 +79,14 @@ static Program parse_gravity(const std::string& script_path, bool strict_mode = 
     std::regex friction_re(R"(^friction\s+([-+0-9.eE]+)\s*$)");
     std::regex thrust_re(R"(^thrust\s+([A-Za-z_]\w*)\s+by\s+(\[[^\]]+\])\[(\w+\/s)\]\s*$)");
     std::regex observe_re(R"obs(^observe\s+([A-Za-z_]\w*)\.position\s+to\s+"([^"]+)"\s+frequency\s+(\d+)\s*$)obs");
-
+    std::regex dump_all_re(R"obs(^dump_all\s+to\s+"([^"]+)"\s+frequency\s+(\d+)\s*$)obs");
+    std::regex plot_re(R"(^plot\s+(on|off)(?:\s+body\s+([A-Za-z_]\w*))?\s*$)");
+    std::regex verbose_re(R"(^verbose\s+(on|off)\s*$)");
+    std::regex merge_heat_re(R"(^merge_heat\s+([-+0-9.eE]+)\s*$)");
+    std::regex throttle_target_re(R"(^throttle\s+([A-Za-z_]\w*)\s+to\s+maintain\s+velocity\s+([-+0-9.eE]+)\[(m\/s)\]\s*$)");
+    std::regex gravity_turn_re(R"(^gravity_turn\s+([A-Za-z_]\w*)\s+start\s+([-+0-9.eE]+)\[(m|km)\]\s+end\s+([-+0-9.eE]+)\[(m|km)\]\s+final_pitch\s+([-+0-9.eE]+)\s*$)");
+    std::regex detach_event_re(R"(^event\s+step\s+(\d+)\s+detach\s+([A-Za-z_]\w*)\s+from\s+([A-Za-z_]\w*)\s*$)");
+    std::regex rocket_assign_re(R"(^([A-Za-z_]\w*)\.(dry_mass|fuel_mass|burn_rate|max_thrust|isp_sea_level|isp_vacuum|drag_coefficient|cross_section|throttle)\s*=.*$)");
     bool in_block = false;
     std::string line;
     size_t line_no = 0;
@@ -89,19 +95,16 @@ static Program parse_gravity(const std::string& script_path, bool strict_mode = 
         if (const auto hash = line.find('#'); hash != std::string::npos) line = line.substr(0, hash);
         line = trim(line);
         if (line.empty()) continue;
-
         std::smatch m;
         if (std::regex_match(line, m, sphere_head_re)) {
             Body b;
-            b.name = m[1];
-            b.pos = parse_vec(m[2], m[3].matched ? m[3].str() : "m");
-
+            b.name = m[2];
+            b.pos = parse_vec(m[3], m[4].matched ? m[4].str() : "m");
             std::smatch mass_match;
             if (!std::regex_search(line, mass_match, mass_re)) {
                 throw std::runtime_error("sphere missing mass: " + line);
             }
             b.mass = std::stod(mass_match[1]) * unit_scale(mass_match[2]);
-
             std::smatch vel_match;
             if (std::regex_search(line, vel_match, velocity_re)) {
                 b.vel = parse_vec(vel_match[1], vel_match[2]);
@@ -110,7 +113,6 @@ static Program parse_gravity(const std::string& script_path, bool strict_mode = 
             p.bodies.push_back(b);
             continue;
         }
-
         if (std::regex_match(line, m, velocity_assign_re)) {
             const std::string target = m[1];
             for (auto& b : p.bodies) {
@@ -121,7 +123,6 @@ static Program parse_gravity(const std::string& script_path, bool strict_mode = 
             }
             continue;
         }
-
         if (std::regex_match(line, m, orbit_re)) {
             const double start = std::stod(m[2]);
             const double stop = std::stod(m[3]);
@@ -135,12 +136,10 @@ static Program parse_gravity(const std::string& script_path, bool strict_mode = 
             in_block = true;
             continue;
         }
-
         if (std::regex_match(line, m, friction_re)) {
             p.friction = std::stod(m[1]);
             continue;
         }
-
         if (std::regex_match(line, grav_all_re)) {
             for (const auto& s : p.bodies) {
                 for (const auto& t : p.bodies) {
@@ -149,12 +148,10 @@ static Program parse_gravity(const std::string& script_path, bool strict_mode = 
             }
             continue;
         }
-
         if (in_block && line == "}") {
             in_block = false;
             continue;
         }
-
         if (line.find(" pull ") != std::string::npos) {
             auto pos = line.find(" pull ");
             std::string src = trim(line.substr(0, pos));
@@ -167,17 +164,14 @@ static Program parse_gravity(const std::string& script_path, bool strict_mode = 
             }
             continue;
         }
-
         if (in_block && std::regex_match(line, m, print_re)) {
             p.print_position_names.push_back(m[1]);
             continue;
         }
-
         if (in_block && std::regex_match(line, m, print_vel_re)) {
             p.print_velocity_names.push_back(m[1]);
             continue;
         }
-
         if (std::regex_match(line, m, thrust_re)) {
             Program::ThrustSpec thrust;
             thrust.name = m[1];
@@ -185,7 +179,16 @@ static Program parse_gravity(const std::string& script_path, bool strict_mode = 
             p.step_thrusts.push_back(thrust);
             continue;
         }
-
+        if (std::regex_match(line, m, dump_all_re)) {
+            p.dump_all_file = m[1];
+            p.dump_all_frequency = std::max(1, std::stoi(m[2]));
+            continue;
+        }
+        if (std::regex_match(line, m, plot_re)) {
+            p.auto_plot = (m[1] == "on");
+            if (m[2].matched) p.auto_plot_body = m[2];
+            continue;
+        }
         if (in_block && std::regex_match(line, m, observe_re)) {
             Program::ObserveSpec obs;
             obs.name = m[1];
@@ -194,10 +197,16 @@ static Program parse_gravity(const std::string& script_path, bool strict_mode = 
             p.observe_specs.push_back(obs);
             continue;
         }
-
+        if (std::regex_match(line, m, verbose_re) ||
+            std::regex_match(line, m, merge_heat_re) ||
+            std::regex_match(line, m, throttle_target_re) ||
+            std::regex_match(line, m, gravity_turn_re) ||
+            std::regex_match(line, m, detach_event_re) ||
+            std::regex_match(line, m, rocket_assign_re)) {
+            continue;
+        }
         if (strict_mode) throw std::runtime_error("unsupported line " + std::to_string(line_no) + ": " + line);
     }
-
     if (p.steps <= 0) throw std::runtime_error("no orbit/simulate loop found");
     if (p.bodies.empty()) throw std::runtime_error("no sphere objects found");
     if (p.pulls.empty() && p.bodies.size() > 1) {
@@ -209,40 +218,51 @@ static Program parse_gravity(const std::string& script_path, bool strict_mode = 
     }
     return p;
 }
-
 static std::string emit_cpp(const Program& p) {
     std::ostringstream out;
-    out << "#include <cmath>\n#include <fstream>\n#include <iostream>\n#include <string>\n#include <unordered_map>\n#include <vector>\n#include <array>\n"
-        << "struct Body{std::string n;double px,py,pz,vx,vy,vz,m;bool f;};\n"
-        << "int main(){const double G=6.67430e-11;std::vector<Body>b={\n";
+    out << "#include <algorithm>\n#include <cmath>\n#include <fstream>\n#include <iostream>\n#include <string>\n#include <unordered_map>\n#include <vector>\n#include <array>\n#include <filesystem>\n#include <sstream>\n";
+    out << "struct Body{std::string n;double px,py,pz,vx,vy,vz,m;bool f;};\n";
+    out << "int main(){const double G=6.67430e-11;std::vector<Body>b={\n";
     for (const auto& body : p.bodies) {
         out << "{\"" << body.name << "\"," << body.pos[0] << "," << body.pos[1] << "," << body.pos[2]
             << "," << body.vel[0] << "," << body.vel[1] << "," << body.vel[2] << "," << body.mass
             << "," << (body.fixed ? "true" : "false") << "},\n";
     }
     out << "};std::unordered_map<std::string,int>ix;for(int i=0;i<(int)b.size();++i)ix[b[i].n]=i;\n";
+    out << "auto ensure_parent_dir=[&](const std::string& p){auto parent=std::filesystem::path(p).parent_path();if(!parent.empty())std::filesystem::create_directories(parent);};\n";
     out << "std::vector<std::pair<int,int>>pulls={";
-    for (const auto& pr : p.pulls) out << "{" << "ix[\"" << pr.first << "\"],ix[\"" << pr.second << "\"]},";
+    for (const auto& pr : p.pulls) out << "{ix[\"" << pr.first << "\"],ix[\"" << pr.second << "\"]},";
     out << "};\n";
 
     for (size_t i = 0; i < p.observe_specs.size(); ++i) {
         const auto& obs = p.observe_specs[i];
-        out << "std::ofstream obs" << i << "(\"" << obs.output_file << "\");obs" << i << "<<\"step,x,y,z\\n\";\n";
+        out << "ensure_parent_dir(\"" << obs.output_file << "\");std::ofstream obs" << i << "(\"" << obs.output_file << "\");obs" << i << "<<\"step,x,y,z\\n\";\n";
+    }
+
+    if (p.dump_all_frequency > 0 && !p.dump_all_file.empty()) {
+        out << "ensure_parent_dir(\"" << p.dump_all_file << "\");std::ofstream dump_all(\"" << p.dump_all_file << "\");dump_all<<\"step,body,x,y,z,vx,vy,vz\\n\";\n";
+    }
+
+    if (p.auto_plot) {
+        std::string body = p.auto_plot_body.empty() ? "Rocket" : p.auto_plot_body;
+        std::string safe = body;
+        for (char& c : safe) if (!std::isalnum(static_cast<unsigned char>(c)) && c != '-' && c != '_') c = '_';
+        if (safe.empty()) safe = "body";
+        out << "ensure_parent_dir(\"artifacts/telemetry_" << safe << ".txt\");std::ofstream telemetry(\"artifacts/telemetry_" << safe << ".txt\");telemetry<<\"step,altitude_km\\n\";int tele_ix=ix[\"" << body << "\"];\n";
     }
 
     out << "auto compute_acc=[&](const std::vector<Body>&state){std::vector<std::array<double,3>>a(state.size(),{0,0,0});"
         << "for(auto &pr:pulls){auto&s=state[pr.first];auto&t=state[pr.second];double dx=s.px-t.px,dy=s.py-t.py,dz=s.pz-t.pz;double r2=dx*dx+dy*dy+dz*dz+1e-18;double r=sqrt(r2);double am=G*s.m/r2;a[pr.second][0]+=am*dx/r;a[pr.second][1]+=am*dy/r;a[pr.second][2]+=am*dz/r;}return a;};\n";
 
     out << "for(int step=0;step<" << p.steps << ";++step){\n";
-
     for (const auto& thrust : p.step_thrusts) {
         out << "{auto &o=b[ix[\"" << thrust.name << "\"]];if(!o.f){o.vx+=" << thrust.delta_v[0]
             << ";o.vy+=" << thrust.delta_v[1] << ";o.vz+=" << thrust.delta_v[2] << ";}}\n";
     }
 
     if (p.integrator == "euler") {
-        out << "auto a=compute_acc(b);for(size_t i=0;i<b.size();++i){if(b[i].f)continue;"
-            << "b[i].vx+=a[i][0]*" << p.dt << ";b[i].vy+=a[i][1]*" << p.dt << ";b[i].vz+=a[i][2]*" << p.dt << ";"
+        out << "auto a=compute_acc(b);for(size_t i=0;i<b.size();++i){if(b[i].f)continue;b[i].vx+=a[i][0]*" << p.dt
+            << ";b[i].vy+=a[i][1]*" << p.dt << ";b[i].vz+=a[i][2]*" << p.dt << ";"
             << "b[i].vx*=(1.0-" << p.friction << ");b[i].vy*=(1.0-" << p.friction << ");b[i].vz*=(1.0-" << p.friction << ");"
             << "b[i].px+=b[i].vx*" << p.dt << ";b[i].py+=b[i].vy*" << p.dt << ";b[i].pz+=b[i].vz*" << p.dt << ";}\n";
     } else if (p.integrator == "leapfrog") {
@@ -258,30 +278,39 @@ static std::string emit_cpp(const Program& p) {
             << "tmp[i].px=b[i].px+b[i].vx*" << p.dt << "+0.5*a1[i][0]*" << p.dt * p.dt << ";"
             << "tmp[i].py=b[i].py+b[i].vy*" << p.dt << "+0.5*a1[i][1]*" << p.dt * p.dt << ";"
             << "tmp[i].pz=b[i].pz+b[i].vz*" << p.dt << "+0.5*a1[i][2]*" << p.dt * p.dt << ";}"
-            << "auto a2=compute_acc(tmp);for(size_t i=0;i<b.size();++i){if(b[i].f)continue;"
-            << "b[i].px=tmp[i].px;b[i].py=tmp[i].py;b[i].pz=tmp[i].pz;"
+            << "auto a2=compute_acc(tmp);for(size_t i=0;i<b.size();++i){if(b[i].f)continue;b[i].px=tmp[i].px;b[i].py=tmp[i].py;b[i].pz=tmp[i].pz;"
             << "b[i].vx+=(a1[i][0]+a2[i][0])*" << p.dt * 0.5 << ";b[i].vy+=(a1[i][1]+a2[i][1])*" << p.dt * 0.5
-            << ";b[i].vz+=(a1[i][2]+a2[i][2])*" << p.dt * 0.5 << ";"
-            << "b[i].vx*=(1.0-" << p.friction << ");b[i].vy*=(1.0-" << p.friction << ");b[i].vz*=(1.0-" << p.friction << ");}\n";
+            << ";b[i].vz+=(a1[i][2]+a2[i][2])*" << p.dt * 0.5 << ";b[i].vx*=(1.0-" << p.friction << ");b[i].vy*=(1.0-" << p.friction << ");b[i].vz*=(1.0-" << p.friction << ");}\n";
     }
 
     for (const auto& name : p.print_position_names) {
-        out << "{auto&o=b[ix[\"" << name << "\"]];std::cout<<\"" << name
-            << ".position=(\"<<o.px<<\", \"<<o.py<<\", \"<<o.pz<<\")\\n\";}\n";
+        out << "{auto&o=b[ix[\"" << name << "\"]];std::cout<<\"" << name << ".position=(\"<<o.px<<\", \"<<o.py<<\", \"<<o.pz<<\")\\n\";}\n";
     }
-
     for (const auto& name : p.print_velocity_names) {
-        out << "{auto&o=b[ix[\"" << name << "\"]];std::cout<<\"" << name
-            << ".velocity=(\"<<o.vx<<\", \"<<o.vy<<\", \"<<o.vz<<\")\\n\";}\n";
+        out << "{auto&o=b[ix[\"" << name << "\"]];std::cout<<\"" << name << ".velocity=(\"<<o.vx<<\", \"<<o.vy<<\", \"<<o.vz<<\")\\n\";}\n";
     }
-
     for (size_t i = 0; i < p.observe_specs.size(); ++i) {
         const auto& obs = p.observe_specs[i];
-        out << "if((step+1)%" << obs.frequency << "==0){auto&o=b[ix[\"" << obs.name << "\"]];"
-            << "obs" << i << "<<(step+1)<<\",\"<<o.px<<\",\"<<o.py<<\",\"<<o.pz<<\"\\n\";}\n";
+        out << "if((step+1)%" << obs.frequency << "==0){auto&o=b[ix[\"" << obs.name << "\"]];obs" << i << "<<(step+1)<<\",\"<<o.px<<\",\"<<o.py<<\",\"<<o.pz<<\"\\n\";}\n";
+    }
+    if (p.dump_all_frequency > 0 && !p.dump_all_file.empty()) {
+        out << "if((step+1)%" << p.dump_all_frequency << "==0){for(const auto&o:b){dump_all<<(step+1)<<\",\"<<o.n<<\",\"<<o.px<<\",\"<<o.py<<\",\"<<o.pz<<\",\"<<o.vx<<\",\"<<o.vy<<\",\"<<o.vz<<\"\\n\";}}\n";
+    }
+    if (p.auto_plot) {
+        out << "{const auto&o=b[tele_ix];double r=sqrt(o.px*o.px+o.py*o.py+o.pz*o.pz);double alt=std::max(0.0,r-6371000.0)/1000.0;telemetry<<(step+1)<<\",\"<<alt<<\"\\n\";}\n";
+    }
+    out << "}\n";
+
+    if (p.auto_plot) {
+        std::string safe = p.auto_plot_body.empty() ? "Rocket" : p.auto_plot_body;
+        for (char& c : safe) if (!std::isalnum(static_cast<unsigned char>(c)) && c != '-' && c != '_') c = '_';
+        if (safe.empty()) safe = "body";
+        out << "std::cout<<\"[System] C++ telemetry report written: artifacts/telemetry_" << safe << ".txt\\n\";\n";
     }
 
-    out << "}\nreturn 0;}\n";
+
+
+    out << "return 0;}\n";
     return out.str();
 }
 
@@ -296,13 +325,11 @@ int main(int argc, char** argv) {
             << "  gravityc --help\n"
             << "  gravityc --version\n";
     };
-
     if (argc < 2) {
         print_help();
         std::cout << "\nTip: use `gravityc <script.gravity> --emit out.cpp` to generate C++.\n";
         return 2;
     }
-
     const std::string first = argv[1];
     if (first == "--help" || first == "-h" || first == "help") {
         print_help();
@@ -312,14 +339,12 @@ int main(int argc, char** argv) {
         std::cout << "gravityc ENGINE v3.0 emitter build " << __DATE__ << " " << __TIME__ << "\n";
         return 0;
     }
-
     std::string script = argv[1];
     std::string emit;
     std::string build;
     std::string cxx = "g++";
     bool run_output = false;
     bool strict_mode = false;
-
     for (int i = 2; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "--emit" && i + 1 < argc) emit = argv[++i];
@@ -333,20 +358,17 @@ int main(int argc, char** argv) {
             return 2;
         }
     }
-
     if (emit.empty()) {
         std::cerr << "error: --emit is required\n";
         print_help();
         return 2;
     }
-
     try {
         Program p = parse_gravity(script, strict_mode);
         std::ofstream out(emit);
         if (!out) throw std::runtime_error("cannot open output file: " + emit);
         out << emit_cpp(p);
         out.close();
-
         if (!build.empty()) {
             std::string cmd = cxx + " -O3 -std=c++17 ";
 #ifdef _WIN32
