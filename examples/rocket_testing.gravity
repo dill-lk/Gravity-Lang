@@ -1,0 +1,26 @@
+# Simple rocket testing scenario
+rocket Rocket at [0,6371000,0][m] mass 30000[kg] radius 3[m] velocity [0,0,0][m/s]
+sphere Earth at [0,0,0][m] mass 5.972e24[kg] radius 6371000[m] fixed
+probe Stage1 at [0,6371000,0][m] mass 6000[kg] radius 2[m] velocity [0,0,0][m/s] fixed
+
+grav all
+
+Rocket.dry_mass = 12000[kg]
+Rocket.fuel_mass = 18000[kg]
+Rocket.burn_rate = 250[kg/s]
+Rocket.max_thrust = 7.0e5[N]
+Rocket.isp_sea_level = 282[s]
+Rocket.isp_vacuum = 320[s]
+Rocket.drag_coefficient = 0.35
+Rocket.cross_section = 8[m2]
+Rocket.throttle = 0.9
+throttle Rocket to maintain velocity 1500[m/s]
+gravity_turn Rocket start 10[km] end 80[km] final_pitch 85
+
+merge_heat 0.3
+event step 120 detach Stage1 from Rocket
+
+dump_all to "artifacts/rocket_dump.csv" frequency 20
+verbose on
+simulate orbit in 0..200 dt 1[s] integrator rk45 {
+}
